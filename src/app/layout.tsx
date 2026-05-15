@@ -32,6 +32,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" className="dark">
+      <head>
+        {/* Reemplaza al deprecated apple-mobile-web-app-capable */}
+        <meta name="mobile-web-app-capable" content="yes" />
+      </head>
       <body className="bg-bg text-white min-h-screen">
         <AuthProvider>
           <ServiceWorkerRegister />

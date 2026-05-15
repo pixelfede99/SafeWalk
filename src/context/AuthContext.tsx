@@ -32,9 +32,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
         return;
       }
-      const initial = await getUserDoc(u.uid);
-      setUserDoc(initial);
-      setLoading(false);
+      try {
+        const initial = await getUserDoc(u.uid);
+        setUserDoc(initial);
+      } catch (err) {
+        console.error("[AuthContext] no se pudo leer el doc del usuario:", err);
+        setUserDoc(null);
+      } finally {
+        setLoading(false);
+      }
     });
     return () => unsub();
   }, []);
