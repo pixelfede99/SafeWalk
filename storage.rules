@@ -1,0 +1,13 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Fotos y audios de las alertas: solo lectura para usuarios autenticados.
+    // El ESP32 sube los archivos con su propia credencial (token de servicio),
+    // por lo que no necesitamos permisos de escritura desde el cliente.
+    match /alerts/{deviceId}/{file=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}

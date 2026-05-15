@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Usuarios: cada uno lee y escribe SOLO su propio doc.
+    match /users/{userId} {
+      allow read, write: if isSelf(userId);
+    }
+
+    // Dispositivos: dueño y cuidadores leen; solo el dueño puede escribir
+    // metadatos de vinculación. Los datos en vivo (batería, ubicación) los
+    // sobreescribe el ESP32 con su propia clave de servicio (Admin SDK / REST
+    // con un secret). En las reglas de cliente los hacemos read-only.
+    match /devices/{deviceId} {
+      allow read: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        request.auth.uid in resource.data.caregiverUids
+      );
+      // El cliente solo puede crear el doc al emparejar (un dueño nuevo).
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      // No permitimos actualizaciones desde el cliente; el ESP32 lo hace fuera de estas reglas.
+      allow update, delete: if false;
+    }
+
+    // Historial de ubicaciones: solo lectura para usuarios autorizados.
+    match /locations/{deviceId}/history/{point} {
+      allow read: if isSignedIn() && exists(/databases/$(database)/documents/devices/$(deviceId))
+        && (
+          get(/databases/$(database)/documents/devices/$(deviceId)).data.ownerUid == request.auth.uid ||
+          request.auth.uid in get(/databases/$(database)/documents/devices/$(deviceId)).data.caregiverUids
+        );
+      allow write: if false; // solo el ESP32
+    }
+
+    // Alertas: read para autorizados; el cliente puede marcar 'seen'.
+    match /alerts/{alertId} {
+      allow read: if isSignedIn() && exists(/databases/$(database)/documents/devices/$(resource.data.deviceId))
+        && (
+          get(/databases/$(database)/documents/devices/$(resource.data.deviceId)).data.ownerUid == request.auth.uid ||
+          request.auth.uid in get(/databases/$(database)/documents/devices/$(resource.data.deviceId)).data.caregiverUids
+        );
+      // Solo permitimos actualizar los flags de "visto"
+      allow update: if isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen', 'seenBy']);
+      allow create, delete: if false; // solo el ESP32 crea
+    }
+  }
+}
