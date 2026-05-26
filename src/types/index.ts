@@ -7,7 +7,8 @@ export interface UserDoc {
   email: string;
   name: string;
   role: UserRole;
-  deviceId: string | null;
+  deviceId: string | null;     // dispositivo/círculo ACTIVO (el que se está viendo)
+  deviceIds?: string[];        // TODOS los dispositivos/círculos a los que pertenece
   createdAt: Timestamp;
 }
 

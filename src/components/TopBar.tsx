@@ -1,13 +1,31 @@
 "use client";
 
 import Link from "next/link";
+import { useAuth } from "@/context/AuthContext";
+import { CircleSwitcher } from "./CircleSwitcher";
 
-export function TopBar({ title, showHistory = true }: { title: string; showHistory?: boolean }) {
+export function TopBar({
+  title,
+  showHistory = true,
+  showSwitcher = true
+}: {
+  title: string;
+  showHistory?: boolean;
+  showSwitcher?: boolean;
+}) {
+  const { user, userDoc } = useAuth();
   return (
     <header className="sticky top-0 z-30 bg-bg/95 backdrop-blur border-b border-white/5">
-      <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        <div className="flex items-center gap-2">
+      <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+        <h1 className="text-lg font-semibold truncate">{title}</h1>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {showSwitcher && user && userDoc?.deviceIds && (
+            <CircleSwitcher
+              uid={user.uid}
+              deviceIds={userDoc.deviceIds}
+              activeDeviceId={userDoc.deviceId}
+            />
+          )}
           {showHistory && (
             <Link
               href="/alerts"

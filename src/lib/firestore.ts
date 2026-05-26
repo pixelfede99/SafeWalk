@@ -55,7 +55,24 @@ export async function setUserRole(uid: string, role: UserRole): Promise<void> {
 }
 
 export async function setUserDevice(uid: string, deviceId: string): Promise<void> {
-  await setDoc(doc(db, "users", uid), { deviceId }, { merge: true });
+  // Setea el activo Y lo agrega al array de todos los círculos del usuario
+  await setDoc(
+    doc(db, "users", uid),
+    { deviceId, deviceIds: arrayUnion(deviceId) },
+    { merge: true }
+  );
+}
+
+/** Cambia el dispositivo activo (sin tocar la lista de todos los círculos). */
+export async function switchActiveDevice(uid: string, deviceId: string): Promise<void> {
+  await updateDoc(doc(db, "users", uid), { deviceId });
+}
+
+/** Obtiene los docs de varios dispositivos en paralelo. */
+export async function getDevices(deviceIds: string[]): Promise<DeviceDoc[]> {
+  if (deviceIds.length === 0) return [];
+  const results = await Promise.all(deviceIds.map((id) => getDoc(doc(db, "devices", id))));
+  return results.filter((s) => s.exists()).map((s) => s.data() as DeviceDoc);
 }
 
 export function listenUserDoc(uid: string, cb: (u: UserDoc | null) => void): Unsubscribe {
@@ -104,20 +121,34 @@ export async function joinDeviceByCode(uid: string, code: string): Promise<strin
   await updateDoc(doc(db, "devices", deviceId), {
     caregiverUids: arrayUnion(uid)
   });
-  await setDoc(doc(db, "users", uid), { deviceId }, { merge: true });
+  // Lo seteamos como activo y lo agregamos al array de todos los círculos
+  await setDoc(
+    doc(db, "users", uid),
+    { deviceId, deviceIds: arrayUnion(deviceId) },
+    { merge: true }
+  );
   return deviceId;
 }
 
-/** Desvincular al usuario de su dispositivo actual. */
-export async function leaveDevice(uid: string, deviceId: string, isOwner: boolean): Promise<void> {
+/** Desvincular al usuario del dispositivo y elegir otro activo si tiene varios. */
+export async function leaveDevice(
+  uid: string,
+  deviceId: string,
+  isOwner: boolean,
+  remainingIds: string[]
+): Promise<string | null> {
   if (!isOwner) {
-    // Si es cuidador, solo lo sacamos del array
     await updateDoc(doc(db, "devices", deviceId), {
       caregiverUids: arrayRemove(uid)
     });
   }
-  // En ambos casos, le quitamos el deviceId al usuario
-  await setDoc(doc(db, "users", uid), { deviceId: null }, { merge: true });
+  // Si tenía otros círculos, seteamos el primero como activo. Sino null.
+  const nextActive = remainingIds.length > 0 ? remainingIds[0] : null;
+  await updateDoc(doc(db, "users", uid), {
+    deviceId: nextActive,
+    deviceIds: arrayRemove(deviceId)
+  });
+  return nextActive;
 }
 
 /** Crea una alerta desde la PWA (botón SOS de respaldo). */

@@ -68,8 +68,8 @@ function DashboardContent() {
 
       {hasNew && alert && <AlertBanner alert={alert} onDismiss={onDismissAlert} />}
 
-      <main className="flex-1 flex flex-col">
-        <div className="relative h-[60vh] w-full">
+      <main className="flex-1 flex flex-col max-w-5xl w-full mx-auto px-4 py-4 space-y-4">
+        <div className="relative h-[55vh] w-full rounded-2xl overflow-hidden border border-white/5">
           <Map center={center} trail={trail} />
           {paused && (
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300 z-[400]">
@@ -78,13 +78,11 @@ function DashboardContent() {
           )}
         </div>
 
-        <section className="p-4 space-y-4 max-w-5xl w-full mx-auto">
-          <DevicePanel device={device} />
+        <DevicePanel device={device} />
 
-          {alert && !hasNew && (
-            <PreviousAlertCard alertId={alert.id} when={alert.timestamp?.toDate?.()} />
-          )}
-        </section>
+        {alert && !hasNew && (
+          <PreviousAlertCard alertId={alert.id} when={alert.timestamp?.toDate?.()} />
+        )}
       </main>
 
       {isDemoDevice && (

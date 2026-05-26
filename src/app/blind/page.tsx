@@ -7,7 +7,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { BatteryIcon } from "@/components/BatteryIcon";
-import { createSosAlert } from "@/lib/firestore";
+import { createSosAlert, setUserRole } from "@/lib/firestore";
 
 export default function BlindPage() {
   return (
@@ -19,9 +19,11 @@ export default function BlindPage() {
 
 function BlindContent() {
   const router = useRouter();
-  const { userDoc } = useAuth();
+  const { user, userDoc } = useAuth();
   const { device } = useDevice(userDoc?.deviceId);
   const [holdProgress, setHoldProgress] = useState(0);
+  const [switchProgress, setSwitchProgress] = useState(0);
+  const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
     // Anuncia el estado por TTS al entrar (lectores de pantalla ya leen el aria-label)
@@ -34,6 +36,40 @@ function BlindContent() {
   const onLogout = async () => {
     await signOut();
     router.replace("/login");
+  };
+
+  // Hold-to-confirm de 1.5s para evitar cambios accidentales
+  const onSwitchHoldStart = () => {
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += 100 / 15; // 100% en 1.5s (15 ticks de 100ms)
+      setSwitchProgress(progress);
+      if (progress >= 100) {
+        clearInterval(interval);
+        confirmSwitchRole();
+      }
+    }, 100);
+    (window as Window & { _switchInterval?: number })._switchInterval = interval as unknown as number;
+  };
+
+  const onSwitchHoldEnd = () => {
+    const w = window as Window & { _switchInterval?: number };
+    if (w._switchInterval) clearInterval(w._switchInterval);
+    setSwitchProgress(0);
+  };
+
+  const confirmSwitchRole = async () => {
+    if (!user || switching) return;
+    setSwitching(true);
+    try {
+      speak("Cambiando a modo familiar.");
+      await setUserRole(user.uid, "caregiver");
+      router.replace("/dashboard");
+    } catch (err) {
+      console.error("Error cambiando rol:", err);
+      speak("Error al cambiar de modo. Intentá de nuevo.");
+      setSwitching(false);
+    }
   };
 
   // El SOS de la PWA es secundario; el principal est&#225; en el bot&#243;n f&#237;sico del bast&#243;n.
@@ -75,16 +111,41 @@ function BlindContent() {
 
   return (
     <main className="min-h-screen bg-black text-white flex flex-col">
-      <header className="px-6 py-5 flex items-center justify-between border-b-4 border-white">
+      <header className="px-6 py-5 flex items-center justify-between border-b-4 border-white gap-3">
         <h1 className="text-3xl font-black">SafeWalk</h1>
-        <button
-          onClick={onLogout}
-          aria-label="Cerrar sesión"
-          className="text-2xl font-bold underline"
-        >
-          Salir
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onTouchStart={onSwitchHoldStart}
+            onTouchEnd={onSwitchHoldEnd}
+            onMouseDown={onSwitchHoldStart}
+            onMouseUp={onSwitchHoldEnd}
+            onMouseLeave={onSwitchHoldEnd}
+            disabled={switching}
+            aria-label="Mantené apretado para cambiar a modo familiar"
+            className="relative text-xl font-bold underline overflow-hidden px-3 py-2 disabled:opacity-50"
+          >
+            Modo familiar
+            {switchProgress > 0 && (
+              <span
+                className="absolute bottom-0 left-0 h-1 bg-white transition-none"
+                style={{ width: `${switchProgress}%` }}
+              />
+            )}
+          </button>
+          <button
+            onClick={onLogout}
+            aria-label="Cerrar sesión"
+            className="text-xl font-bold underline"
+          >
+            Salir
+          </button>
+        </div>
       </header>
+      {switchProgress > 0 && switchProgress < 100 && (
+        <div className="bg-yellow-400 text-black text-center font-bold text-xl py-2">
+          Mantené apretado para cambiar de modo...
+        </div>
+      )}
 
       <section className="px-6 py-8 space-y-6 border-b-4 border-white">
         <StatusRow

@@ -7,9 +7,11 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { TopBar } from "@/components/TopBar";
 import { signOut } from "@/lib/auth";
 import {
-  getDevice,
+  getDevices,
   setUserRole,
   leaveDevice,
+  switchActiveDevice,
+  joinDeviceByCode,
   generateInviteCode
 } from "@/lib/firestore";
 import { doc, updateDoc } from "firebase/firestore";
@@ -27,23 +29,28 @@ export default function AccountPage() {
 function AccountContent() {
   const router = useRouter();
   const { user, userDoc } = useAuth();
-  const [device, setDevice] = useState<DeviceDoc | null>(null);
+  const [devices, setDevices] = useState<DeviceDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [showJoinForm, setShowJoinForm] = useState(false);
+
+  const deviceIds = userDoc?.deviceIds ?? (userDoc?.deviceId ? [userDoc.deviceId] : []);
 
   useEffect(() => {
-    if (!userDoc?.deviceId) {
-      setDevice(null);
+    if (deviceIds.length === 0) {
+      setDevices([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    getDevice(userDoc.deviceId).then((d) => {
-      setDevice(d);
+    getDevices(deviceIds).then((d) => {
+      setDevices(d);
       setLoading(false);
     });
-  }, [userDoc?.deviceId]);
+  }, [deviceIds.join(",")]);
 
   const onChangeRole = async (newRole: UserRole) => {
     if (!user || !userDoc) return;
@@ -56,42 +63,71 @@ function AccountContent() {
     }
   };
 
-  const onUnpair = async () => {
-    if (!user || !device || !userDoc) return;
-    const ok = confirm(
-      `¿Seguro que querés desvincular el bastón "${device.name}"?\n\nNo vas a poder ver su ubicación ni recibir alertas.`
-    );
-    if (!ok) return;
-    setBusy("unpair");
+  const onSwitchActive = async (deviceId: string) => {
+    if (!user || deviceId === userDoc?.deviceId) return;
+    setBusy(`switch-${deviceId}`);
     try {
-      const isOwner = device.ownerUid === user.uid;
-      await leaveDevice(user.uid, device.deviceId, isOwner);
-      router.replace("/pair");
+      await switchActiveDevice(user.uid, deviceId);
     } finally {
       setBusy(null);
     }
   };
 
-  const onRegenerateCode = async () => {
-    if (!device) return;
-    setBusy("code");
+  const onUnpair = async (device: DeviceDoc) => {
+    if (!user) return;
+    const isOwner = device.ownerUid === user.uid;
+    const ok = confirm(
+      `¿${isOwner ? "Eliminar" : "Salir de"} "${device.name}"?\n\nNo vas a poder ver su ubicación ni recibir alertas.`
+    );
+    if (!ok) return;
+    setBusy(`leave-${device.deviceId}`);
+    try {
+      const remaining = deviceIds.filter((id) => id !== device.deviceId);
+      const nextActive = await leaveDevice(user.uid, device.deviceId, isOwner, remaining);
+      if (!nextActive) {
+        router.replace("/pair");
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onRegenerateCode = async (device: DeviceDoc) => {
+    setBusy(`regen-${device.deviceId}`);
     try {
       const newCode = generateInviteCode();
       await updateDoc(doc(db, "devices", device.deviceId), { inviteCode: newCode });
-      setDevice({ ...device, inviteCode: newCode });
+      setDevices((arr) =>
+        arr.map((d) => (d.deviceId === device.deviceId ? { ...d, inviteCode: newCode } : d))
+      );
     } finally {
       setBusy(null);
     }
   };
 
-  const onCopyCode = async () => {
-    if (!device?.inviteCode) return;
+  const onCopyCode = async (device: DeviceDoc) => {
+    if (!device.inviteCode) return;
     try {
       await navigator.clipboard.writeText(device.inviteCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setCopiedId(device.deviceId);
+      setTimeout(() => setCopiedId(null), 1500);
     } catch {
-      /* navegadores sin clipboard API */
+      /* sin clipboard API */
+    }
+  };
+
+  const onJoinSubmit = async () => {
+    if (!user || joinCode.length < 6) return;
+    setJoinError(null);
+    setBusy("join");
+    try {
+      await joinDeviceByCode(user.uid, joinCode);
+      setJoinCode("");
+      setShowJoinForm(false);
+    } catch (err) {
+      setJoinError((err as Error).message);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -100,15 +136,12 @@ function AccountContent() {
     router.replace("/login");
   };
 
-  const isOwner = device && user && device.ownerUid === user.uid;
-  const memberCount = device ? 1 + (device.caregiverUids?.filter((u) => u !== device.ownerUid).length ?? 0) : 0;
-
   return (
     <div className="min-h-screen flex flex-col">
-      <TopBar title="Mi cuenta" showHistory={false} />
+      <TopBar title="Mi cuenta" showHistory={false} showSwitcher={false} />
 
-      <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 space-y-4">
-        {/* Datos del usuario */}
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-4 space-y-4">
+        {/* Perfil */}
         <Card title="Perfil">
           <Row label="Nombre" value={userDoc?.name || "—"} />
           <Row label="Email" value={user?.email ?? "—"} />
@@ -127,68 +160,85 @@ function AccountContent() {
           </div>
         </Card>
 
-        {/* Círculo / Bastón */}
-        <Card title="Mi círculo">
+        {/* Lista de círculos */}
+        <Card title={`Mis círculos${devices.length > 0 ? ` (${devices.length})` : ""}`}>
           {loading ? (
             <p className="text-slate-400 text-sm">Cargando...</p>
-          ) : !device ? (
-            <div className="space-y-3">
-              <p className="text-slate-400 text-sm">No estás vinculado a ningún bastón todavía.</p>
-              <button
-                onClick={() => router.push("/pair")}
-                className="bg-accent hover:bg-accent-bright text-white text-sm font-medium px-4 py-2 rounded-lg"
-              >
-                Vincular un bastón
-              </button>
-            </div>
+          ) : devices.length === 0 ? (
+            <p className="text-slate-400 text-sm">Todavía no estás en ningún círculo.</p>
           ) : (
-            <>
-              <Row label="Bastón" value={device.name} />
-              <Row label="Tu rol" value={isOwner ? "Dueño" : "Cuidador"} />
-              <Row label="Miembros" value={`${memberCount} persona${memberCount === 1 ? "" : "s"}`} />
+            <div className="space-y-3">
+              {devices.map((d) => (
+                <CircleCard
+                  key={d.deviceId}
+                  device={d}
+                  isOwner={d.ownerUid === user?.uid}
+                  isActive={d.deviceId === userDoc?.deviceId}
+                  copied={copiedId === d.deviceId}
+                  busy={busy}
+                  onSwitch={() => onSwitchActive(d.deviceId)}
+                  onCopy={() => onCopyCode(d)}
+                  onRegenerate={() => onRegenerateCode(d)}
+                  onLeave={() => onUnpair(d)}
+                />
+              ))}
+            </div>
+          )}
 
-              <div className="pt-3 border-t border-white/5">
-                <p className="text-xs uppercase tracking-wider text-slate-400 mb-2">Código de invitación</p>
-                <p className="text-xs text-slate-500 mb-3">
-                  Compartilo con familiares para que se unan al círculo y vean este bastón.
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 bg-bg-elevated border border-white/10 rounded-lg px-4 py-3 font-mono text-xl tracking-widest text-center">
-                    {device.inviteCode || "------"}
-                  </code>
-                  <button
-                    onClick={onCopyCode}
-                    className="bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg px-3 py-3"
-                    aria-label="Copiar código"
-                  >
-                    {copied ? "✓" : "📋"}
-                  </button>
-                </div>
-                {isOwner && (
-                  <button
-                    onClick={onRegenerateCode}
-                    disabled={busy === "code"}
-                    className="text-xs text-slate-400 hover:text-white mt-2"
-                  >
-                    {busy === "code" ? "Generando..." : "Regenerar código"}
-                  </button>
-                )}
-              </div>
-
-              <div className="pt-3 border-t border-white/5">
+          {/* Unirme a otro círculo */}
+          <div className="pt-3 border-t border-white/5">
+            {!showJoinForm ? (
+              <div className="flex gap-2 flex-wrap">
                 <button
-                  onClick={onUnpair}
-                  disabled={busy === "unpair"}
-                  className="text-sm bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger rounded-lg px-3 py-2"
+                  onClick={() => setShowJoinForm(true)}
+                  className="text-sm bg-accent hover:bg-accent-bright text-white rounded-lg px-3 py-2"
                 >
-                  {busy === "unpair" ? "Desvinculando..." : isOwner ? "Eliminar bastón" : "Salir del círculo"}
+                  🔗 Unirme a otro círculo
+                </button>
+                <button
+                  onClick={() => router.push("/pair")}
+                  className="text-sm bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg px-3 py-2"
+                >
+                  + Vincular un bastón nuevo
                 </button>
               </div>
-            </>
-          )}
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-400">Pegá el código que te compartieron:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                    placeholder="ABC234"
+                    maxLength={6}
+                    className="flex-1 bg-bg-elevated border border-white/10 rounded-lg px-3 py-2 text-center font-mono text-lg tracking-widest focus:outline-none focus:border-accent"
+                  />
+                  <button
+                    onClick={onJoinSubmit}
+                    disabled={joinCode.length < 6 || busy === "join"}
+                    className="bg-accent hover:bg-accent-bright disabled:opacity-50 text-white text-sm font-semibold rounded-lg px-4"
+                  >
+                    {busy === "join" ? "..." : "Unirme"}
+                  </button>
+                </div>
+                {joinError && <p className="text-danger text-xs">{joinError}</p>}
+                <button
+                  onClick={() => {
+                    setShowJoinForm(false);
+                    setJoinError(null);
+                    setJoinCode("");
+                  }}
+                  className="text-xs text-slate-400 hover:text-white"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
+          </div>
         </Card>
 
-        {/* Salir */}
+        {/* Sesión */}
         <Card title="Sesión">
           <button
             onClick={onLogout}
@@ -198,6 +248,96 @@ function AccountContent() {
           </button>
         </Card>
       </main>
+    </div>
+  );
+}
+
+function CircleCard({
+  device,
+  isOwner,
+  isActive,
+  copied,
+  busy,
+  onSwitch,
+  onCopy,
+  onRegenerate,
+  onLeave
+}: {
+  device: DeviceDoc;
+  isOwner: boolean;
+  isActive: boolean;
+  copied: boolean;
+  busy: string | null;
+  onSwitch: () => void;
+  onCopy: () => void;
+  onRegenerate: () => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div
+      className={`border rounded-xl p-3 space-y-3 ${
+        isActive ? "border-accent/40 bg-accent/5" : "border-white/10 bg-bg-elevated/40"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="font-semibold">{device.name}</p>
+          <p className="text-xs text-slate-400">
+            {isOwner ? "Dueño" : "Cuidador"} ·{" "}
+            {1 + (device.caregiverUids?.filter((u) => u !== device.ownerUid).length ?? 0)} miembro
+            {(device.caregiverUids?.length ?? 0) === 0 ? "" : "s"}
+          </p>
+        </div>
+        {isActive ? (
+          <span className="text-xs bg-accent/20 text-accent-glow rounded-full px-2 py-1 flex-shrink-0">
+            Activo
+          </span>
+        ) : (
+          <button
+            onClick={onSwitch}
+            disabled={busy === `switch-${device.deviceId}`}
+            className="text-xs bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg px-3 py-1.5"
+          >
+            {busy === `switch-${device.deviceId}` ? "..." : "Ver"}
+          </button>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 bg-bg-elevated border border-white/10 rounded-lg px-3 py-2 font-mono text-base tracking-widest text-center">
+            {device.inviteCode || "------"}
+          </code>
+          <button
+            onClick={onCopy}
+            className="bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
+            aria-label="Copiar código"
+          >
+            {copied ? "✓" : "📋"}
+          </button>
+        </div>
+        {isOwner && (
+          <button
+            onClick={onRegenerate}
+            disabled={busy === `regen-${device.deviceId}`}
+            className="text-xs text-slate-400 hover:text-white mt-1"
+          >
+            {busy === `regen-${device.deviceId}` ? "Generando..." : "Regenerar código"}
+          </button>
+        )}
+      </div>
+
+      <button
+        onClick={onLeave}
+        disabled={busy === `leave-${device.deviceId}`}
+        className="text-xs bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger rounded-lg px-3 py-1.5"
+      >
+        {busy === `leave-${device.deviceId}`
+          ? "..."
+          : isOwner
+          ? "Eliminar bastón"
+          : "Salir del círculo"}
+      </button>
     </div>
   );
 }
