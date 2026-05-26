@@ -10,6 +10,7 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "./firebase";
+import { generateInviteCode } from "./firestore";
 
 // Coordenadas de Plaza de Mayo, Buenos Aires
 const BASE_LAT = -34.6083;
@@ -36,7 +37,8 @@ export async function seedDemoDevice(uid: string): Promise<string> {
     lastSeen: serverTimestamp(),
     location: { lat: BASE_LAT, lng: BASE_LNG },
     speed: 1.2,
-    bluetoothId: null
+    bluetoothId: null,
+    inviteCode: generateInviteCode()
   });
 
   // 2. Sembrar puntos de historial (caminata de 30 min)

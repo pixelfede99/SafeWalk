@@ -27,6 +27,7 @@ export interface DeviceDoc {
   location: GeoPoint;
   speed: number;
   bluetoothId?: string;
+  inviteCode?: string;
 }
 
 export interface LocationPoint {

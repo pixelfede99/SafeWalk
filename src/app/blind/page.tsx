@@ -7,6 +7,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { BatteryIcon } from "@/components/BatteryIcon";
+import { createSosAlert } from "@/lib/firestore";
 
 export default function BlindPage() {
   return (
@@ -56,10 +57,20 @@ function BlindContent() {
     setHoldProgress(0);
   };
 
-  const triggerSos = () => {
-    speak("Alerta enviada. Tus familiares fueron notificados.");
-    // Aclaraci&#243;n: el ESP32 maneja el SOS f&#237;sico real.
-    // Acá solo damos feedback al usuario; el bot&#243;n f&#237;sico es el verdadero gatillo.
+  const triggerSos = async () => {
+    if (!device) {
+      speak("Error: el bastón no está conectado.");
+      return;
+    }
+    try {
+      const loc = device.location?.lat ? device.location : { lat: 0, lng: 0 };
+      await createSosAlert(device.deviceId, loc);
+      speak("Alerta enviada. Tus familiares fueron notificados.");
+      if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
+    } catch (err) {
+      console.error("Error enviando SOS:", err);
+      speak("No se pudo enviar la alerta. Intentá de nuevo.");
+    }
   };
 
   return (

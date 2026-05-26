@@ -2,19 +2,33 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
+  addDoc,
   query,
   where,
   orderBy,
   limit,
   onSnapshot,
   serverTimestamp,
+  arrayUnion,
+  arrayRemove,
   Timestamp,
   type Unsubscribe
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint } from "@/types";
+
+// Genera un código de invitación de 6 chars (sin caracteres ambiguos)
+export function generateInviteCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+  for (let i = 0; i < 6; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
 
 // ----------------- USERS -----------------
 
@@ -70,10 +84,62 @@ export async function createDevice(
       lastSeen: serverTimestamp(),
       location: { lat: 0, lng: 0 },
       speed: 0,
-      bluetoothId: bluetoothId ?? null
+      bluetoothId: bluetoothId ?? null,
+      inviteCode: generateInviteCode()
     },
     { merge: true }
   );
+}
+
+/** Busca un dispositivo por código de invitación y agrega al usuario como cuidador. */
+export async function joinDeviceByCode(uid: string, code: string): Promise<string> {
+  const normalized = code.trim().toUpperCase();
+  const q = query(collection(db, "devices"), where("inviteCode", "==", normalized), limit(1));
+  const snap = await getDocs(q);
+  if (snap.empty) {
+    throw new Error("No encontramos ningún bastón con ese código.");
+  }
+  const deviceDoc = snap.docs[0];
+  const deviceId = deviceDoc.id;
+  await updateDoc(doc(db, "devices", deviceId), {
+    caregiverUids: arrayUnion(uid)
+  });
+  await setDoc(doc(db, "users", uid), { deviceId }, { merge: true });
+  return deviceId;
+}
+
+/** Desvincular al usuario de su dispositivo actual. */
+export async function leaveDevice(uid: string, deviceId: string, isOwner: boolean): Promise<void> {
+  if (!isOwner) {
+    // Si es cuidador, solo lo sacamos del array
+    await updateDoc(doc(db, "devices", deviceId), {
+      caregiverUids: arrayRemove(uid)
+    });
+  }
+  // En ambos casos, le quitamos el deviceId al usuario
+  await setDoc(doc(db, "users", uid), { deviceId: null }, { merge: true });
+}
+
+/** Crea una alerta desde la PWA (botón SOS de respaldo). */
+export async function createSosAlert(
+  deviceId: string,
+  location: { lat: number; lng: number }
+): Promise<void> {
+  await addDoc(collection(db, "alerts"), {
+    deviceId,
+    timestamp: serverTimestamp(),
+    location,
+    photoUrl: "",
+    audioUrl: "",
+    seen: false,
+    source: "pwa_sos" // diferenciador del SOS físico del ESP32
+  });
+}
+
+/** Listener al doc de un device específico para una sola lectura. */
+export async function getDevice(deviceId: string): Promise<DeviceDoc | null> {
+  const snap = await getDoc(doc(db, "devices", deviceId));
+  return snap.exists() ? (snap.data() as DeviceDoc) : null;
 }
 
 export function listenDevice(deviceId: string, cb: (d: DeviceDoc | null) => void): Unsubscribe {

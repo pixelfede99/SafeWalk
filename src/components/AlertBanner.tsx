@@ -29,7 +29,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
   };
 
   return (
-    <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-4 sm:pt-4">
+    <div className="fixed inset-x-0 top-0 z-[2000] px-3 pt-3 sm:px-4 sm:pt-4">
       <div className="mx-auto max-w-3xl rounded-2xl border-2 border-danger bg-bg-card shadow-2xl shadow-danger/30 overflow-hidden">
         <header className="bg-danger px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">

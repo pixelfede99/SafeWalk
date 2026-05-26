@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
-import { createDevice, setUserDevice } from "@/lib/firestore";
+import { createDevice, setUserDevice, joinDeviceByCode } from "@/lib/firestore";
 import { isWebBluetoothSupported, requestSafeWalkDevice } from "@/lib/bluetooth";
 import { seedDemoDevice } from "@/lib/demo";
 
-type Step = "intro" | "scanning" | "found" | "manual" | "linking" | "done";
+type Step = "intro" | "scanning" | "found" | "manual" | "join" | "linking" | "done";
 
 export default function PairPage() {
   const router = useRouter();
@@ -16,6 +16,7 @@ export default function PairPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanned, setScanned] = useState<{ id: string; name: string } | null>(null);
   const [manualId, setManualId] = useState("");
+  const [joinCode, setJoinCode] = useState("");
   const [bluetoothSupported, setBluetoothSupported] = useState(true);
 
   useEffect(() => {
@@ -48,6 +49,22 @@ export default function PairPage() {
       }
       setError(msg || "No pudimos buscar dispositivos");
       setStep("intro");
+    }
+  };
+
+  const onJoinByCode = async () => {
+    if (!user || !joinCode.trim()) return;
+    setError(null);
+    setStep("linking");
+    try {
+      await joinDeviceByCode(user.uid, joinCode);
+      setStep("done");
+      setTimeout(() => {
+        router.replace(userDoc?.role === "blind_user" ? "/blind" : "/dashboard");
+      }, 800);
+    } catch (err) {
+      setError((err as Error).message);
+      setStep("join");
     }
   };
 
@@ -129,10 +146,17 @@ export default function PairPage() {
             )}
 
             <button
+              onClick={() => setStep("join")}
+              className="w-full bg-bg-card hover:bg-bg-elevated border border-accent/30 text-white font-medium py-4 rounded-xl mb-3"
+            >
+              🔗 Unirme a un círculo con código
+            </button>
+
+            <button
               onClick={() => setStep("manual")}
               className="w-full bg-bg-card hover:bg-bg-elevated border border-white/10 text-white font-medium py-4 rounded-xl mb-3"
             >
-              Ingresar ID manualmente
+              Ingresar ID del bastón manualmente
             </button>
 
             <div className="my-6 flex items-center gap-3 text-xs text-slate-500">
@@ -218,6 +242,39 @@ export default function PairPage() {
               className="w-full bg-accent hover:bg-accent-bright disabled:opacity-50 text-white font-semibold py-4 rounded-xl mb-3"
             >
               Vincular bastón
+            </button>
+            <button onClick={() => setStep("intro")} className="w-full text-slate-400 hover:text-white py-2">
+              Volver
+            </button>
+          </div>
+        )}
+
+        {step === "join" && (
+          <div>
+            <h2 className="text-2xl font-bold mb-2">Unirme a un círculo</h2>
+            <p className="text-slate-400 mb-6 text-sm">
+              Ingresá el código de 6 letras que te compartió tu familiar.
+              Lo sacan desde su Cuenta → Mi círculo.
+            </p>
+            <input
+              type="text"
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              placeholder="ABC234"
+              maxLength={6}
+              className="w-full bg-bg-elevated border border-white/10 rounded-lg px-4 py-3 text-white text-center text-2xl font-mono tracking-widest mb-4 focus:outline-none focus:border-accent"
+            />
+            {error && (
+              <div className="bg-danger/10 border border-danger/30 text-danger rounded-lg p-3 text-sm mb-4">
+                {error}
+              </div>
+            )}
+            <button
+              onClick={onJoinByCode}
+              disabled={joinCode.length < 6}
+              className="w-full bg-accent hover:bg-accent-bright disabled:opacity-50 text-white font-semibold py-4 rounded-xl mb-3"
+            >
+              Unirme al círculo
             </button>
             <button onClick={() => setStep("intro")} className="w-full text-slate-400 hover:text-white py-2">
               Volver
