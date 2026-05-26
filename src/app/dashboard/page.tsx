@@ -69,10 +69,10 @@ function DashboardContent() {
       {hasNew && alert && <AlertBanner alert={alert} onDismiss={onDismissAlert} />}
 
       <main className="flex-1 flex flex-col">
-        <div className="relative flex-1 min-h-[55vh]">
+        <div className="relative h-[60vh] w-full">
           <Map center={center} trail={trail} />
           {paused && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300 z-[400]">
               Actualizaciones pausadas (pestaña en segundo plano)
             </div>
           )}

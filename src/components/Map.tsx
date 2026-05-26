@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import type { GeoPoint, LocationPoint } from "@/types";
 
 // El ícono por defecto de Leaflet usa rutas relativas que rompen en Next.js;
@@ -84,6 +85,7 @@ export default function Map({ center, trail = [], alertLocation = null, zoom = 1
       )}
 
       <Recenter center={center} />
+      <InvalidateOnMount />
     </MapContainer>
   );
 }
@@ -99,5 +101,19 @@ function Recenter({ center }: { center: GeoPoint }) {
     map.panTo([center.lat, center.lng], { animate: true, duration: 0.5 });
   }, [center, map]);
 
+  return null;
+}
+
+/** Fuerza a Leaflet a recalcular el tamaño después del montaje.
+ *  Sin esto, si el contenedor cambia de tamaño después del primer render,
+ *  el mapa queda gris/vacío. */
+function InvalidateOnMount() {
+  const map = useMap();
+  useEffect(() => {
+    const timers = [50, 200, 500, 1000].map((ms) =>
+      setTimeout(() => map.invalidateSize(), ms)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [map]);
   return null;
 }
