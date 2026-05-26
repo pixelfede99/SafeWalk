@@ -35,11 +35,13 @@ export async function getUserDoc(uid: string): Promise<UserDoc | null> {
 }
 
 export async function setUserRole(uid: string, role: UserRole): Promise<void> {
-  await updateDoc(doc(db, "users", uid), { role });
+  // Usamos setDoc con merge para que funcione tanto si el doc existe
+  // como si nunca se llegó a crear (ej. signup interrumpido).
+  await setDoc(doc(db, "users", uid), { role }, { merge: true });
 }
 
 export async function setUserDevice(uid: string, deviceId: string): Promise<void> {
-  await updateDoc(doc(db, "users", uid), { deviceId });
+  await setDoc(doc(db, "users", uid), { deviceId }, { merge: true });
 }
 
 export function listenUserDoc(uid: string, cb: (u: UserDoc | null) => void): Unsubscribe {
