@@ -11,6 +11,7 @@ import { DevicePanel } from "@/components/DevicePanel";
 import { AlertBanner } from "@/components/AlertBanner";
 import { markAlertSeen } from "@/lib/firestore";
 import { requestNotificationPermission, showLocalNotification } from "@/lib/notifications";
+import { seedDemoAlert } from "@/lib/demo";
 
 const Map = dynamic(() => import("@/components/Map"), { ssr: false });
 
@@ -55,6 +56,12 @@ function DashboardContent() {
     dismissNew();
   };
 
+  const isDemoDevice = deviceId?.startsWith("demo-") ?? false;
+  const onSimulateAlert = async () => {
+    if (!deviceId) return;
+    await seedDemoAlert(deviceId);
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <TopBar title="SafeWalk" />
@@ -79,6 +86,16 @@ function DashboardContent() {
           )}
         </section>
       </main>
+
+      {isDemoDevice && (
+        <button
+          onClick={onSimulateAlert}
+          className="fixed bottom-5 right-5 z-40 bg-danger hover:bg-danger/90 text-white font-semibold rounded-full shadow-2xl shadow-danger/50 px-5 py-3 flex items-center gap-2"
+          title="Crea una alerta de prueba para ver el banner de emergencia"
+        >
+          <span className="text-lg">🚨</span> Simular alerta
+        </button>
+      )}
     </div>
   );
 }

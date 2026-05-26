@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { createDevice, setUserDevice } from "@/lib/firestore";
 import { isWebBluetoothSupported, requestSafeWalkDevice } from "@/lib/bluetooth";
+import { seedDemoDevice } from "@/lib/demo";
 
 type Step = "intro" | "scanning" | "found" | "manual" | "linking" | "done";
 
@@ -46,6 +47,23 @@ export default function PairPage() {
         return;
       }
       setError(msg || "No pudimos buscar dispositivos");
+      setStep("intro");
+    }
+  };
+
+  const startDemo = async () => {
+    if (!user) return;
+    setError(null);
+    setStep("linking");
+    try {
+      const deviceId = await seedDemoDevice(user.uid);
+      await setUserDevice(user.uid, deviceId);
+      setStep("done");
+      setTimeout(() => {
+        router.replace(userDoc?.role === "blind_user" ? "/blind" : "/dashboard");
+      }, 800);
+    } catch (err) {
+      setError((err as Error).message);
       setStep("intro");
     }
   };
@@ -112,10 +130,26 @@ export default function PairPage() {
 
             <button
               onClick={() => setStep("manual")}
-              className="w-full bg-bg-card hover:bg-bg-elevated border border-white/10 text-white font-medium py-4 rounded-xl"
+              className="w-full bg-bg-card hover:bg-bg-elevated border border-white/10 text-white font-medium py-4 rounded-xl mb-3"
             >
               Ingresar ID manualmente
             </button>
+
+            <div className="my-6 flex items-center gap-3 text-xs text-slate-500">
+              <div className="flex-1 h-px bg-white/10" />
+              <span>o sin bastón físico</span>
+              <div className="flex-1 h-px bg-white/10" />
+            </div>
+
+            <button
+              onClick={startDemo}
+              className="w-full bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent-glow font-medium py-4 rounded-xl"
+            >
+              🧪 Probar con bastón de demo
+            </button>
+            <p className="text-xs text-slate-500 mt-2">
+              Crea un dispositivo simulado con ubicación, batería y recorrido. Ideal para probar la app antes de tener el ESP32.
+            </p>
           </div>
         )}
 
