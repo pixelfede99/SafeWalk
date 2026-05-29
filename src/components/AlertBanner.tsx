@@ -30,7 +30,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
 
   return (
     <div className="fixed inset-x-0 top-0 z-[2000] px-3 pt-3 sm:px-4 sm:pt-4">
-      <div className="mx-auto max-w-3xl rounded-2xl border-2 border-danger bg-bg-card shadow-2xl shadow-danger/30 overflow-hidden">
+      <div className="mx-auto max-w-3xl rounded-2xl border-2 border-danger bg-bg-card shadow-2xl shadow-danger/30 overflow-hidden animate-banner-in origin-top">
         <header className="bg-danger px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <svg viewBox="0 0 24 24" className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2.5}>
@@ -38,7 +38,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
             </svg>
             <span className="font-bold text-white uppercase tracking-wide">Alerta de emergencia</span>
           </div>
-          <button onClick={onDismiss} className="text-white/80 hover:text-white" aria-label="Cerrar alerta">
+          <button onClick={onDismiss} className="text-white/80 hover:text-white transition-transform duration-150 motion-safe:active:scale-90" aria-label="Cerrar alerta">
             <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -65,7 +65,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
                 <button
                   onClick={() => onDownload("photo")}
                   disabled={downloading === "photo"}
-                  className="w-full text-sm bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg py-2 px-3"
+                  className="w-full text-sm bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg py-2 px-3 transition-transform duration-150 motion-safe:active:scale-[0.97]"
                 >
                   {downloading === "photo" ? "Descargando..." : "Descargar foto"}
                 </button>
@@ -84,7 +84,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
                 <button
                   onClick={() => onDownload("audio")}
                   disabled={downloading === "audio"}
-                  className="w-full text-sm bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg py-2 px-3"
+                  className="w-full text-sm bg-bg-elevated hover:bg-white/5 border border-white/10 rounded-lg py-2 px-3 transition-transform duration-150 motion-safe:active:scale-[0.97]"
                 >
                   {downloading === "audio" ? "Descargando..." : "Descargar audio"}
                 </button>

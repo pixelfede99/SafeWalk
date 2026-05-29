@@ -178,7 +178,7 @@ function BlindContent() {
           onMouseUp={onSosHoldEnd}
           onMouseLeave={onSosHoldEnd}
           aria-label="Botón de emergencia. Mantenelo apretado para enviar alerta."
-          className="relative w-72 h-72 rounded-full bg-red-600 active:bg-red-700 text-white border-8 border-white flex items-center justify-center"
+          className="relative w-72 h-72 rounded-full bg-red-600 active:bg-red-700 text-white border-8 border-white flex items-center justify-center transition-transform duration-150 motion-safe:active:scale-[0.98]"
           style={{
             boxShadow: "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(239,68,68,0.5)"
           }}

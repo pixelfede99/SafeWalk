@@ -72,7 +72,7 @@ function DashboardContent() {
         <div className="relative h-[55vh] w-full rounded-2xl overflow-hidden border border-white/5">
           <Map center={center} trail={trail} />
           {paused && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300 z-[400]">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300 z-[400] animate-fade-in">
               Actualizaciones pausadas (pestaña en segundo plano)
             </div>
           )}
@@ -88,7 +88,7 @@ function DashboardContent() {
       {isDemoDevice && (
         <button
           onClick={onSimulateAlert}
-          className="fixed bottom-5 right-5 z-40 bg-danger hover:bg-danger/90 text-white font-semibold rounded-full shadow-2xl shadow-danger/50 px-5 py-3 flex items-center gap-2"
+          className="fixed bottom-5 right-5 z-40 bg-danger hover:bg-danger/90 text-white font-semibold rounded-full shadow-2xl shadow-danger/50 px-5 py-3 flex items-center gap-2 transition-transform duration-150 motion-safe:active:scale-95"
           title="Crea una alerta de prueba para ver el banner de emergencia"
         >
           <span className="text-lg">🚨</span> Simular alerta
@@ -100,7 +100,7 @@ function DashboardContent() {
 
 function PreviousAlertCard({ when }: { alertId: string; when?: Date }) {
   return (
-    <div className="bg-bg-card border border-white/5 rounded-2xl p-4">
+    <div className="bg-bg-card border border-white/5 rounded-2xl p-4 animate-fade-rise">
       <p className="text-xs uppercase tracking-wider text-slate-400 mb-1">Última alerta</p>
       <p className="text-sm">
         {when ? when.toLocaleString("es-AR") : "—"}{" "}

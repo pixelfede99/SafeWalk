@@ -4,6 +4,10 @@
 
 :root {
   color-scheme: dark;
+
+  /* Curvas custom: las de CSS por defecto son demasiado débiles. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); /* entradas/salidas: responsivo */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* movimiento en pantalla */
 }
 
 html,
@@ -52,4 +56,29 @@ body {
   background: #fff;
   color: #000;
   border: 4px solid #fff;
+}
+
+/* Spinner más rápido → la app se *percibe* más veloz aunque la carga sea igual. */
+.spin-fast {
+  animation: spin 0.7s linear infinite;
+}
+
+/*
+ * Movimiento reducido: no es "cero animación", es menos y más suave.
+ * Conservamos cambios de opacidad/color (ayudan a comprender el estado) y
+ * eliminamos sólo el movimiento de posición/escala. Las entradas se vuelven
+ * un fade simple. El progreso del SOS es JS, no se ve afectado.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-banner-in,
+  .animate-popover-in,
+  .animate-fade-rise {
+    animation: fade-in 200ms ease both;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
 }

@@ -33,7 +33,7 @@ export default function Home() {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="flex flex-col items-center gap-4">
-        <div className="w-16 h-16 rounded-full border-4 border-accent border-t-transparent animate-spin" />
+        <div className="w-16 h-16 rounded-full border-4 border-accent border-t-transparent spin-fast" />
         <p className="text-slate-400">Cargando SafeWalk...</p>
       </div>
     </div>

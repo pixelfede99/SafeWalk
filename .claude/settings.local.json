@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm --version)"
+      "Bash(npm --version)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"/      -> HTTP %{http_code} en %{time_total}s\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"/login -> HTTP %{http_code} en %{time_total}s\\\\n\" http://localhost:3000/login)"
     ]
   }
 }
