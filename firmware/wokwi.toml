@@ -1,0 +1,19 @@
+# ============================================================================
+#  wokwi.toml  -  Simulación del DevKit en Wokwi (VS Code o wokwi.com)
+#  ----------------------------------------------------------------------------
+#  Apunta al binario compilado del env "devkit". Compilá primero con:
+#     pio run -e devkit
+#  y después abrí la simulación (extensión Wokwi for VS Code).
+#
+#  Para simular un TEST puntual, cambiá las rutas al env correspondiente, ej:
+#     firmware = '.pio/build/test_hcsr04/firmware.bin'
+#     elf      = '.pio/build/test_hcsr04/firmware.elf'
+#
+#  OJO: Wokwi NO simula cámara OV2640 ni audio I2S/SD -> el ESP32-CAM se prueba
+#  solo en hardware real. Tampoco hay parte de GPS NEO-6M: en la simulación el
+#  firmware usa la ubicación por defecto (Obelisco) hasta tener fix real.
+# ============================================================================
+[wokwi]
+version = 1
+firmware = '.pio/build/devkit/firmware.bin'
+elf = '.pio/build/devkit/firmware.elf'

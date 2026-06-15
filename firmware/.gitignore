@@ -1,0 +1,22 @@
+# ============================================================
+#  .gitignore del firmware (PlatformIO)
+# ============================================================
+
+# >>> SECRETOS: nunca subir credenciales <<<
+include/secrets.h
+secrets.h
+
+# Artefactos de compilación PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code / PlatformIO
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+
+# Misc
+*.bin
+*.elf
