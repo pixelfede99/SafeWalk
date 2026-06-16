@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "author": "SafeWalk",
+  "editor": "wokwi",
+  "//": "Solo la parte SIMULABLE del bastón (DevKit). Cámara OV2640 y audio I2S/SD del ESP32-CAM NO se simulan en Wokwi: se prueban en hardware real. El GPS NEO-6M tampoco tiene parte en Wokwi; el firmware usa la ubicacion por defecto hasta tener fix.",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-hc-sr04", "id": "ultrasonic", "top": -180, "left": 200, "attrs": {} },
+    { "type": "wokwi-mpu6050", "id": "imu", "top": 40, "left": 230, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn", "top": 160, "left": -180, "attrs": { "color": "red" } },
+    { "type": "wokwi-buzzer", "id": "bz", "top": 200, "left": 60, "attrs": { "volume": "0.1" } },
+    { "type": "wokwi-led", "id": "motor", "top": -60, "left": -160, "attrs": { "color": "blue", "label": "MOTOR" } },
+    { "type": "wokwi-resistor", "id": "rmotor", "top": -60, "left": -90, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+
+    [ "esp:D26", "ultrasonic:TRIG", "green", [ "h0" ] ],
+    [ "esp:D25", "ultrasonic:ECHO", "green", [ "h0" ] ],
+    [ "esp:5V",  "ultrasonic:VCC",  "red",   [ "h0" ] ],
+    [ "esp:GND.1", "ultrasonic:GND", "black", [ "h0" ] ],
+
+    [ "esp:D21", "imu:SDA", "blue",  [ "h0" ] ],
+    [ "esp:D22", "imu:SCL", "yellow",[ "h0" ] ],
+    [ "esp:D34", "imu:INT", "purple",[ "h0" ] ],
+    [ "esp:3V3", "imu:VCC", "red",   [ "h0" ] ],
+    [ "esp:GND.2", "imu:GND", "black", [ "h0" ] ],
+
+    [ "esp:D33", "btn:1.l", "green", [ "h0" ] ],
+    [ "btn:2.l", "esp:GND.3", "black", [ "h0" ] ],
+
+    [ "esp:D2", "bz:1", "orange", [ "h0" ] ],
+    [ "bz:2", "esp:GND.1", "black", [ "h0" ] ],
+
+    [ "esp:D27", "rmotor:1", "magenta", [ "h0" ] ],
+    [ "rmotor:2", "motor:A", "magenta", [ "h0" ] ],
+    [ "motor:C", "esp:GND.2", "black", [ "h0" ] ]
+  ],
+  "dependencies": {}
+}

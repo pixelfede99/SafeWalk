@@ -38,3 +38,13 @@ next-env.d.ts
 # IDE
 .vscode/
 .idea/
+
+# ============================================================
+#  Firmware (PlatformIO) - bastón SafeWalk
+# ============================================================
+# SECRETOS del firmware: nunca subir credenciales WiFi/Firebase
+firmware/include/secrets.h
+**/secrets.h
+# Artefactos de compilación PlatformIO
+firmware/.pio/
+.pio/
