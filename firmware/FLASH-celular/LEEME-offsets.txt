@@ -1,0 +1,27 @@
+SafeWalk - Flasheo del ESP32 DevKit v1 desde el celular (OTG)
+=============================================================
+
+Cargá estos 4 archivos en la app (ESPFlash / ESP32_Flasher), cada uno
+con su direccion (offset) en HEXADECIMAL:
+
+  OFFSET     ARCHIVO
+  --------   ------------------
+  0x1000     bootloader.bin
+  0x8000     partitions.bin
+  0xe000     boot_app0.bin
+  0x10000    firmware.bin
+
+Placa: ESP32 DevKit v1 (chip ESP32 clasico).
+Velocidad (baud) sugerida: 460800 (si falla, bajar a 115200).
+
+Pasos:
+  1. Conecta el ESP32 al celu por USB-C (OTG). Dale permiso USB a la app.
+  2. La app deberia detectar el chip CP210x/CH340.
+  3. Cargá cada .bin con su offset de la tabla de arriba.
+  4. Modo bootloader: manten BOOT, toca EN/RST, solta BOOT
+     (muchas apps lo hacen solas; si no, hacelo a mano).
+  5. Flash / Erase & Write.
+
+Nota: el WiFi y el usuario de Firebase estan con valores de RELLENO.
+La placa arranca igual, pero NO sube datos al dashboard hasta poner
+los datos reales en include/secrets.h y recompilar.

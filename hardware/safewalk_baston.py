@@ -222,8 +222,9 @@ def construir_segmento(seg, z0):
 # =============================================================================
 
 def limpiar_escena():
-    bpy.ops.object.select_all(action='SELECT')
-    bpy.ops.object.delete(use_confirm=False)
+    # Borrar objetos directamente por la API de datos (independiente de version)
+    for ob in list(bpy.data.objects):
+        bpy.data.objects.remove(ob, do_unlink=True)
     for blk in (bpy.data.meshes, bpy.data.objects):
         for d in list(blk):
             if d.users == 0:
@@ -254,8 +255,13 @@ def main():
         for ob in bpy.context.scene.objects:
             bpy.ops.object.select_all(action='DESELECT')
             ob.select_set(True)
+            bpy.context.view_layer.objects.active = ob
             path = os.path.join(EXPORT_DIR, ob.name + ".stl")
-            bpy.ops.export_mesh.stl(filepath=path, use_selection=True)
+            # Blender 4.2+ usa wm.stl_export; versiones viejas export_mesh.stl
+            if hasattr(bpy.ops.wm, "stl_export"):
+                bpy.ops.wm.stl_export(filepath=path, export_selected_objects=True)
+            else:
+                bpy.ops.export_mesh.stl(filepath=path, use_selection=True)
             print("STL ->", path)
 
     bpy.ops.object.select_all(action='DESELECT')
