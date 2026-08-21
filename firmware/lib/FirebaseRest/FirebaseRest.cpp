@@ -14,7 +14,9 @@ static const char* HOST_ST     = "firebasestorage.googleapis.com";
 
 // Credenciales (vienen de secrets.h vía config.h, pero acá las tomamos por macro
 // para no acoplar la lib al config). Se inyectan desde el .cpp que la usa.
-#include "config.h"   // FB_API_KEY, FB_PROJECT_ID, FB_STORAGE_BUCKET
+// Ruta relativa explícita: al compilarse como librería (lib/), el include_dir
+// del proyecto (include/) no está en el CPPPATH, así que apuntamos directo.
+#include "../../include/config.h"   // FB_API_KEY, FB_PROJECT_ID, FB_STORAGE_BUCKET
 
 // ----------------------------------------------------------------------------
 //  WiFi / NTP
