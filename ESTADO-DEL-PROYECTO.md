@@ -2,7 +2,7 @@
 
 > **Para retomar en cualquier PC (o en una charla nueva con Claude):** leé este
 > archivo primero. Resume dónde quedó todo, qué falta y cómo seguir.
-> Última actualización: 2026-08-21.
+> Última actualización: 2026-08-21 (sesión 2: bastón ya ONLINE + testeo de hardware).
 
 ---
 
@@ -25,39 +25,54 @@
 | Firmware ESP32-CAM (`firmware/src/esp32cam/esp32cam_main.cpp`) | ✅ Completo (falta poder flashearlo) |
 | Librería `FirebaseRest` | ✅ Completa (con fix de include para que compile) |
 | Dashboard web | ✅ Completo |
-| **DevKit flasheado por USB (COM3)** | ✅ Hecho, **pero con WiFi de relleno** |
+| **DevKit flasheado por USB (COM3)** | ✅ Hecho, **con credenciales reales** |
 | Dispositivo emparejado en la web (`SAFEWALK-DEVICE-001`) | ✅ Hecho |
+| **Bastón "En línea" en la app** | ✅ **LOGRADO** (WiFi + login Firebase OK) |
 
-### Por qué el bastón figura "Offline" en la app
-La app lee el campo `isOnline` del documento `devices/SAFEWALK-DEVICE-001`. Ese campo
-solo pasa a `true` cuando el **firmware escribe en Firebase**, y para eso necesita
-**WiFi + login en Firebase**. El firmware flasheado todavía tiene el WiFi de relleno,
-así que no conecta → sigue en `false` → la app muestra **Offline**. **No es un bug.**
+### ✅ El bastón ya figura "En línea"
+En la sesión 2 se completó `secrets.h` con el WiFi real y la cuenta de Firebase, se
+arregló un bug del firmware (ver gotchas: *chunked-encoding*) y ahora el bastón
+loguea y escribe en Firebase. El serial muestra `WiFi... OK / NTP... OK / Login.. OK`
+y la app lo muestra **En línea** con batería y ubicación.
+
+**Credenciales usadas (en `secrets.h`, NO versionado):** WiFi = hotspot del celular
+(2.4 GHz); cuenta Firebase = la cuenta personal del usuario (cualquier usuario
+autenticado sirve, las reglas demo permiten escribir a todo usuario logueado).
 
 ---
 
-## Lo que falta para dejarlo "En línea" (próximo paso)
+## Estado del testeo de hardware (sesión 2)
 
-Editar `firmware/include/secrets.h` (NO se versiona, está en `.gitignore`) con datos reales:
+| Componente | Estado | Notas |
+|---|---|---|
+| **HC-SR04 (ultrasónico)** | ✅ Anda perfecto | Mide 1 cm a ~1 m, estable. Divisor del ECHO OK. |
+| **Buzzer** | ✅ Anda perfecto | GPIO2 vía BC547. Pita más rápido cuanto más cerca. |
+| **Motor vibración** | ⚠️ **En debug** | Ver abajo. |
+| **GPS NEO-6M** | ⚠️ Cableado OK, sin fix | `chars recibidos` suben (UART OK), `sats:0`. **Falta cielo** (probar en ventana/afuera, cold start 1-15 min). |
+| Batería | — | 0% correcto (sin batería conectada). |
 
-1. **WiFi** (líneas `WIFI_SSID` / `WIFI_PASSWORD`) — usar una red **2.4 GHz**
-   (el ESP32 no toma 5 GHz). Un hotspot de celular sirve.
-2. **Usuario de Firebase para el bastón** (`FB_DEVICE_EMAIL` / `FB_DEVICE_PASSWORD`):
-   - En Firebase Console → **Authentication** → habilitar **Email/Password** en *Sign-in method*.
-   - En **Users → Add user**, crear uno (ej. `baston@safewalk.local` + contraseña).
-   - Poner ese mismo email/contraseña en `secrets.h`.
-3. Recompilar y reflashear (ver comandos abajo). En segundos debería pasar a "En línea".
+### 🔧 Debug del MOTOR (donde quedó la sesión 2)
+- El motor gira **directo** (+/–) y también con el **puente** (1kΩ a 3.3V forzando el
+  transistor ON) → **el transistor BC547 y el motor están OK**.
+- **Bug encontrado y resuelto:** el diodo **1N4007 estaba al revés** (cortocircuitaba
+  el motor). Va con la **banda blanca (cátodo) hacia el + del motor**.
+- **Problema que quedó abierto:** manejado desde **GPIO27** el motor no responde
+  (anduvo "medio raro" al principio y después nada), aunque el puente a 3.3V sí anda.
+  **Sospecha nº1: cable dupont de GPIO27→1kΩ roto por dentro.** PRÓXIMO PASO:
+  1. Cambiar ese cable por otro nuevo; reasentar todo; probar con la mano quieta a
+     ~5-10 cm del sensor (el motor solo vibra si hay algo a <150 cm).
+  2. Si sigue: flashear un test que prenda/apague GPIO27 cada 1s con `digitalWrite`
+     (sin PWM ni sensor). Si tampoco anda pero el puente sí → GPIO27 dañado, mover el
+     motor a otro pin (ej. GPIO14, libre) en `config.h` (`PIN_MOTOR`).
 
-> El `FB_API_KEY`, `FB_PROJECT_ID` y `FB_STORAGE_BUCKET` ya están cargados (proyecto
-> `safewalk-capstone`). El `SAFEWALK_DEVICE_ID` en `config.h` **debe coincidir exacto**
-> con el ID que se pone en la web (`SAFEWALK-DEVICE-001`).
-
-### Pendientes de hardware
+### Otros pendientes de hardware
 - **ESP32-CAM:** no se puede flashear todavía (no tiene USB). Falta un **adaptador FTDI**
   o la plaquita **ESP32-CAM-MB**.
-- **Micrófono INMP441:** mal soldado (pines cortos), a reconectar.
-- **GPS NEO-6M:** LED apagado adentro es normal (no hay fix sin cielo). Si prende al mover,
-  revisar **falso contacto en VCC/GND**. El GPS NO afecta el estado online.
+- **Micrófono INMP441:** va en el **ESP32-CAM** (no en el DevKit): VDD→3.3V, GND, L/R→GND,
+  WS→GPIO4, SCK→GPIO12, SD→GPIO13.
+- **Alimentación:** comprar un **TP4056 CON protección** (DW01+FS8205, con pads OUT+/OUT−
+  separados de B+/B−); el básico de 4 pines no protege la batería. **MT3608:** ajustar el
+  trimpot a **5.0V midiendo con multímetro ANTES** de conectarlo al ESP32.
 
 ---
 
@@ -78,6 +93,9 @@ pio run -e devkit -t monitor
 
 # 4) tests individuales (env: test_hcsr04, test_gps, test_motor, test_button, ...)
 pio run -e test_gps -t upload -t monitor
+
+# 5) test COMBINADO obstáculo (HC-SR04 + motor + buzzer juntos, sin WiFi)
+pio run -e test_obstacle -t upload -t monitor
 ```
 
 **Flashear desde el celular (sin cable de datos a la PC):** ver `firmware/FLASH-celular/`
@@ -127,6 +145,17 @@ contraseña del WiFi al compilar con credenciales reales).
 ## Decisiones y gotchas (para no repetir errores)
 
 - **Motor a 3.3V** (probado, anda mejor que a 5V; muchos motores de vibración son 3V).
+- **Diodo flyback del motor:** la **banda blanca (cátodo) va al + del motor**. Al revés
+  cortocircuita y el motor no gira (nos pasó y costó encontrarlo).
+- **Bug del login a Firebase (chunked-encoding) — RESUELTO:** el lector HTTP de
+  `FirebaseRest.cpp` no decodificaba `Transfer-Encoding: chunked` (lo que usa Google),
+  así que la respuesta del login llegaba con los marcadores de tamaño mezclados y el
+  token no se parseaba → `Login.. FALLO` → escrituras `403 PERMISSION_DENIED`. Se agregó
+  `readHttpResponse()` que decodifica chunked/Content-Length y se aplicó a login,
+  Firestore y Storage. Sin esto el bastón nunca pasa a online.
+- **WiFi de colegio/institución no sirve:** tienen portal cautivo/filtro DNS → el ESP32
+  da `DNS Failed` aunque conecte. Compartir por **datos móviles** (apagar el WiFi del
+  celular para que el hotspot salga por 4G/5G).
 - **Fix de compilación:** `FirebaseRest.cpp` incluye `../../include/config.h` con ruta
   relativa, porque al compilarse como librería el `include/` del proyecto no está en el CPPPATH.
 - **GPIO12 del CAM** es "strapping": si algo lo deja en HIGH al boot, la placa no arranca.

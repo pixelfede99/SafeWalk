@@ -19,6 +19,67 @@ static const char* HOST_ST     = "firebasestorage.googleapis.com";
 #include "../../include/config.h"   // FB_API_KEY, FB_PROJECT_ID, FB_STORAGE_BUCKET
 
 // ----------------------------------------------------------------------------
+//  Lector de respuesta HTTP (status + headers + body).
+//  IMPORTANTE: decodifica "Transfer-Encoding: chunked" (Google lo usa casi
+//  siempre). Sin esto, el body llega con los marcadores de tamaño de chunk
+//  mezclados (ej. "7f\n{...}\n0\n") y el JSON no se puede parsear -> el login
+//  fallaba porque no encontraba el idToken. También respeta Content-Length.
+//  Deja en outResponse SOLO el cuerpo limpio. Devuelve true si 2xx.
+// ----------------------------------------------------------------------------
+static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& outResponse) {
+  // --- status line ---
+  String statusLine = client.readStringUntil('\n');
+  outCode = 0;
+  { int sp = statusLine.indexOf(' ');
+    if (sp > 0) outCode = statusLine.substring(sp + 1, sp + 4).toInt(); }
+
+  // --- headers: detectar chunked / content-length ---
+  bool chunked = false;
+  long contentLength = -1;
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r" || line.length() == 0) break;            // fin de headers
+    String low = line; low.toLowerCase();
+    if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") >= 0) chunked = true;
+    else if (low.startsWith("content-length:")) contentLength = line.substring(15).toInt();
+  }
+
+  // --- body ---
+  outResponse = "";
+  const uint32_t deadline = millis() + 15000;   // corte de seguridad
+
+  if (chunked) {
+    while ((int32_t)(deadline - millis()) > 0) {
+      String sizeLine = client.readStringUntil('\n');
+      sizeLine.trim();
+      if (sizeLine.length() == 0) {
+        if (!client.connected() && !client.available()) break;
+        continue;
+      }
+      long chunkSize = strtol(sizeLine.c_str(), nullptr, 16);
+      if (chunkSize <= 0) break;                               // chunk final "0"
+      long got = 0;
+      while (got < chunkSize && (int32_t)(deadline - millis()) > 0) {
+        if (client.available()) { outResponse += (char)client.read(); got++; }
+        else if (!client.connected()) break;
+        else delay(1);
+      }
+      client.readStringUntil('\n');                            // consume el CRLF del chunk
+    }
+  } else {
+    long got = 0;
+    while ((int32_t)(deadline - millis()) > 0) {
+      if (client.available()) {
+        outResponse += (char)client.read(); got++;
+        if (contentLength >= 0 && got >= contentLength) break;
+      } else if (!client.connected()) break;
+      else delay(1);
+    }
+  }
+  return outCode >= 200 && outCode < 300;
+}
+
+// ----------------------------------------------------------------------------
 //  WiFi / NTP
 // ----------------------------------------------------------------------------
 bool FirebaseRest::beginWiFi(const char* ssid, const char* pass, uint32_t timeoutMs) {
@@ -71,24 +132,9 @@ bool FirebaseRest::httpJson(const char* host, const String& path, const char* me
   req += body;
   client.print(req);
 
-  // --- leer status line ---
-  String statusLine = client.readStringUntil('\n');
-  outCode = 0;
-  { int sp = statusLine.indexOf(' ');
-    if (sp > 0) outCode = statusLine.substring(sp + 1, sp + 4).toInt(); }
-
-  // --- saltar headers ---
-  while (client.connected()) {
-    String line = client.readStringUntil('\n');
-    if (line == "\r" || line.length() == 0) break;
-  }
-  // --- body ---
-  outResponse = "";
-  while (client.available() || client.connected()) {
-    while (client.available()) outResponse += (char)client.read();
-  }
+  bool ok = readHttpResponse(client, outCode, outResponse);
   client.stop();
-  return outCode >= 200 && outCode < 300;
+  return ok;
 }
 
 // ----------------------------------------------------------------------------
@@ -130,10 +176,7 @@ bool FirebaseRest::ensureToken() {
   req += "Content-Type: application/x-www-form-urlencoded\r\n";
   req += "Content-Length: " + String(body.length()) + "\r\nConnection: close\r\n\r\n" + body;
   client.print(req);
-  String statusLine = client.readStringUntil('\n');
-  { int sp = statusLine.indexOf(' '); if (sp > 0) code = statusLine.substring(sp+1, sp+4).toInt(); }
-  while (client.connected()) { String l = client.readStringUntil('\n'); if (l == "\r" || l.length()==0) break; }
-  resp = ""; while (client.available() || client.connected()) { while (client.available()) resp += (char)client.read(); }
+  readHttpResponse(client, code, resp);
   client.stop();
 
   if (code < 200 || code >= 300) return false;
@@ -238,10 +281,8 @@ bool FirebaseRest::storageUploadBytes(const String& objectPath, const char* cont
     sent += chunk;
   }
   // leer respuesta
-  int code = 0; String statusLine = client.readStringUntil('\n');
-  { int sp = statusLine.indexOf(' '); if (sp>0) code = statusLine.substring(sp+1,sp+4).toInt(); }
-  while (client.connected()) { String l = client.readStringUntil('\n'); if (l=="\r"||l.length()==0) break; }
-  String resp = ""; while (client.available() || client.connected()) { while (client.available()) resp += (char)client.read(); }
+  int code = 0; String resp;
+  readHttpResponse(client, code, resp);
   client.stop();
   if (code < 200 || code >= 300) { Serial.printf("[FB] storageBytes (%d): %s\n", code, resp.c_str()); return false; }
   return parseStorageResponse(resp, objectPath, outUrl);
@@ -270,10 +311,8 @@ bool FirebaseRest::storageUploadStream(const String& objectPath, const char* con
     client.write(buf, got);
     sent += got;
   }
-  int code = 0; String statusLine = client.readStringUntil('\n');
-  { int sp = statusLine.indexOf(' '); if (sp>0) code = statusLine.substring(sp+1,sp+4).toInt(); }
-  while (client.connected()) { String l = client.readStringUntil('\n'); if (l=="\r"||l.length()==0) break; }
-  String resp = ""; while (client.available() || client.connected()) { while (client.available()) resp += (char)client.read(); }
+  int code = 0; String resp;
+  readHttpResponse(client, code, resp);
   client.stop();
   if (code < 200 || code >= 300) { Serial.printf("[FB] storageStream (%d): %s\n", code, resp.c_str()); return false; }
   return parseStorageResponse(resp, objectPath, outUrl);
