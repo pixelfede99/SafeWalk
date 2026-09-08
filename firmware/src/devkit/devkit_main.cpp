@@ -10,6 +10,14 @@
 //    - WiFi/Firebase: heartbeat, historial y creación del doc de alerta
 //    - Enlace al ESP32-CAM (UART 1 hilo, GPIO13 -> CAM GPIO3): le pasa el alertId
 //
+//  Flujo de ENCONTRAR EL BASTON (la app le pide al baston que suene):
+//    1) la app escribe commands/{deviceId} con un ringToken nuevo + ringSeconds
+//    2) el DevKit lee ese doc cada RING_POLL_INTERVAL_MS (unico camino de
+//       LECTURA del firmware: todo lo demas es escritura)
+//    3) si el token cambio, hace pitar el buzzer en rafagas, sin bloquear el loop
+//    4) escribe ackToken de vuelta para que la app pueda decirle al usuario
+//       que el baston SI recibio la orden (el usuario ciego no puede mirarlo)
+//
 //  Flujo de EMERGENCIA (botón o caída):
 //    1) buzzer avisa
 //    2) DevKit crea alerts/{alertId} con ubicación (photoUrl/audioUrl vacíos, seen=false)
@@ -22,6 +30,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <TinyGPSPlus.h>
+#include <ArduinoJson.h>
 #include "config.h"
 #include "FirebaseRest.h"
 
@@ -97,6 +106,118 @@ static void updateObstacleMotor(long cm) {
   }
 }
 
+// ---------------- "Encontrar el bastón" (pedido de la app) -------------------
+//  La app escribe en commands/{deviceId} un `ringToken` y `ringSeconds`.
+//
+//  El token es un NONCE, no una marca de tiempo: solo miramos si cambió
+//  respecto del último que vimos, nunca lo comparamos contra nuestro reloj ni
+//  por orden. Gracias a eso la función anda aunque el celular tenga la hora
+//  mal, que es un caso bastante común.
+//
+//  Nota de alcance: esto encuentra el bastón POR EL SONIDO. El GPS no sirve
+//  para esto (adentro de una casa no hay fix), así que el buzzer es la función,
+//  no un accesorio.
+// ----------------------------------------------------------------------------
+static long long g_lastRingToken  = 0;
+static bool      g_ringTokenKnown = false;
+static uint32_t  g_lastRingPoll   = 0;
+static uint32_t  g_ringUntilMs    = 0;   // 0 = no está sonando
+static uint32_t  g_ringNextToggle = 0;
+static bool      g_ringBuzzerOn   = false;
+static int       g_ringBeepCount  = 0;
+
+static void ringStop() {
+  g_ringUntilMs   = 0;
+  g_ringBuzzerOn  = false;
+  g_ringBeepCount = 0;
+  digitalWrite(PIN_BUZZER, LOW);
+}
+
+// Pitido NO bloqueante (mismo patrón que el motor de obstáculos): si usáramos
+// delay() acá, el bastón dejaría de detectar obstáculos mientras suena.
+static void updateRingBuzzer() {
+  if (g_ringUntilMs == 0) return;
+
+  const uint32_t now = millis();
+  if ((int32_t)(now - g_ringUntilMs) >= 0) {      // se cumplió el tiempo pedido
+    ringStop();
+    Serial.println("[RING] fin");
+    return;
+  }
+  if ((int32_t)(now - g_ringNextToggle) < 0) return;
+
+  if (g_ringBuzzerOn) {
+    digitalWrite(PIN_BUZZER, LOW);
+    g_ringBuzzerOn = false;
+    g_ringBeepCount++;
+    // Pausa larga cada RING_BEEP_GROUP pitidos: el silencio es justamente lo
+    // que deja ubicar de dónde viene el sonido.
+    const bool endOfGroup = (g_ringBeepCount % RING_BEEP_GROUP) == 0;
+    g_ringNextToggle = now + (endOfGroup ? RING_GROUP_PAUSE_MS : RING_BEEP_OFF_MS);
+  } else {
+    digitalWrite(PIN_BUZZER, HIGH);
+    g_ringBuzzerOn = true;
+    g_ringNextToggle = now + RING_BEEP_ON_MS;
+  }
+}
+
+// Firestore serializa los enteros como STRING dentro de integerValue, y un
+// Date.now() en milisegundos no entra en 32 bits -> atoll, no toInt().
+static long long jsonInt(JsonDocument& doc, const char* field, long long fallback) {
+  const char* raw = doc["fields"][field]["integerValue"].as<const char*>();
+  return raw ? atoll(raw) : fallback;
+}
+
+// Le confirma a la app qué orden ejecutamos. No es un lujo: el usuario ciego no
+// puede mirar el bastón para saber si la orden llegó, así que sin este eco la
+// pantalla le estaría diciendo "está sonando" sin tener con qué respaldarlo.
+static void ringAck(long long token) {
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%lld", token);
+  String fields = String("\"ackToken\":{\"integerValue\":\"") + buf + "\"}";
+  fb.firestoreUpdate(FS_COMMANDS_DOC, fields, "ackToken");
+}
+
+static void pollRingCommand() {
+  String json;
+  if (!fb.firestoreGet(FS_COMMANDS_DOC, json)) return;  // 404 = todavía no hay órdenes
+
+  JsonDocument doc;
+  if (deserializeJson(doc, json)) return;
+
+  const long long token = jsonInt(doc, "ringToken", 0);
+  if (token == 0) return;
+
+  // Primer poll después de bootear: adoptamos el token que haya SIN actuar.
+  // Si no, el bastón se pondría a sonar solo cada vez que se reinicia,
+  // repitiendo una orden vieja que ya nadie pidió.
+  if (!g_ringTokenKnown) {
+    g_lastRingToken  = token;
+    g_ringTokenKnown = true;
+    return;
+  }
+  if (token == g_lastRingToken) return;   // nada nuevo
+  g_lastRingToken = token;
+
+  long secs = (long)jsonInt(doc, "ringSeconds", 0);
+  if (secs <= 0) {                        // 0 = "pará"
+    ringStop();
+    Serial.println("[RING] parar (pedido de la app)");
+    ringAck(token);
+    return;
+  }
+  // Tope propio: no confiamos en el número que mandó la app. Un bug o un reloj
+  // raro del lado del celular no puede dejar el buzzer sonando para siempre.
+  if (secs > RING_MAX_SECONDS) secs = RING_MAX_SECONDS;
+
+  const uint32_t now = millis();
+  g_ringUntilMs    = now + (uint32_t)secs * 1000UL;
+  g_ringNextToggle = now;                 // que arranque a pitar ya
+  g_ringBeepCount  = 0;
+  Serial.printf("[RING] sonando %ld s\n", secs);
+  ringAck(token);
+}
+
 // ---------------- HC-SR04 ----------------
 static long readDistanceCm() {
   digitalWrite(PIN_HCSR04_TRIG, LOW); delayMicroseconds(2);
@@ -119,6 +240,7 @@ static int readBatteryPercent() {
 // ---------------- EMERGENCIA ----------------
 static void triggerEmergency(const char* reason) {
   Serial.printf("\n*** EMERGENCIA (%s) ***\n", reason);
+  ringStop();                               // la emergencia se queda con el buzzer
   beepPattern(3, 120, 100);                 // aviso sonoro
 
   String alertId = String(SAFEWALK_DEVICE_ID) + "_" + FirebaseRest::isoTimestampNow();
@@ -194,6 +316,13 @@ void loop() {
     g_lastUltra = millis();
     long cm = readDistanceCm();
     updateObstacleMotor(cm);
+  }
+
+  // --- Encontrar el bastón: el pitido corre siempre, el poll cada tanto ---
+  updateRingBuzzer();
+  if (millis() - g_lastRingPoll >= RING_POLL_INTERVAL_MS) {
+    g_lastRingPoll = millis();
+    pollRingCommand();                      // OJO: bloquea ~1 s (handshake TLS)
   }
 
   // --- Botón de emergencia ---

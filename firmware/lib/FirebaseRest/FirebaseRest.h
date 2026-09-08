@@ -45,6 +45,12 @@ class FirebaseRest {
   // ADD: crea doc con id automático dentro de una colección.
   bool firestoreAdd(const String& collectionPath, const String& fieldsJson);
 
+  // GET: lee un documento. Deja el JSON crudo de Firestore en outJson
+  // (con la forma {"name":..., "fields":{...}}). Devuelve false si no existe
+  // (404) o si falló la request.
+  bool firestoreGet(const String& docPath, String& outJson);
+
+
   // ---- Storage ----
   // Sube bytes ya en memoria (foto). Devuelve la URL pública en outUrl.
   bool storageUploadBytes(const String& objectPath, const char* contentType,
@@ -56,6 +62,9 @@ class FirebaseRest {
                           Stream& src, size_t len, String& outUrl);
 
   // ---- Helpers de formato ----
+  // OJO: firestoreSet() hace un PATCH SIN updateMask, y eso en la REST API de
+  // Firestore REEMPLAZA el documento entero (los campos que no mandás se
+  // borran). Para tocar solo algunos campos usá firestoreUpdate().
   static String isoTimestampNow();          // "2026-06-15T14:42:44Z"
   static String fStr(const String& s);      // {"stringValue":"..."}
   static String fDouble(double v);          // {"doubleValue": v}

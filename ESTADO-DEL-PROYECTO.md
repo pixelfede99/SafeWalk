@@ -2,7 +2,7 @@
 
 > **Para retomar en cualquier PC (o en una charla nueva con Claude):** leé este
 > archivo primero. Resume dónde quedó todo, qué falta y cómo seguir.
-> Última actualización: 2026-08-21 (sesión 2: bastón ya ONLINE + testeo de hardware).
+> Última actualización: 2026-09-08 (sesión 3: "encontrar el bastón" + SOS arreglado).
 
 ---
 
@@ -25,6 +25,7 @@
 | Firmware ESP32-CAM (`firmware/src/esp32cam/esp32cam_main.cpp`) | ✅ Completo (falta poder flashearlo) |
 | Librería `FirebaseRest` | ✅ Completa (con fix de include para que compile) |
 | Dashboard web | ✅ Completo |
+| "Encontrar el bastón" (web + firmware) | ✅ Código completo, **falta probarlo en el bastón** |
 | **DevKit flasheado por USB (COM3)** | ✅ Hecho, **con credenciales reales** |
 | Dispositivo emparejado en la web (`SAFEWALK-DEVICE-001`) | ✅ Hecho |
 | **Bastón "En línea" en la app** | ✅ **LOGRADO** (WiFi + login Firebase OK) |
@@ -38,6 +39,60 @@ y la app lo muestra **En línea** con batería y ubicación.
 **Credenciales usadas (en `secrets.h`, NO versionado):** WiFi = hotspot del celular
 (2.4 GHz); cuenta Firebase = la cuenta personal del usuario (cualquier usuario
 autenticado sirve, las reglas demo permiten escribir a todo usuario logueado).
+
+---
+
+## Sesión 3: la pantalla del usuario no vidente cambió de función
+
+**Qué se cambió y por qué.** El botón principal del modo no vidente era un SOS, y
+ese SOS no servía para nada en ninguno de los dos escenarios posibles:
+
+- **Con el bastón en la mano:** el botón FÍSICO del bastón es más rápido y
+  además dispara la foto y el audio del ESP32-CAM. El de la app hacía menos.
+- **Sin el bastón:** mandaba `device.location`, o sea la posición del BASTÓN, no
+  la del usuario — justo el caso en el que se usaría. Y si el bastón estaba
+  offline, ni siquiera mandaba la alerta.
+
+Perder el bastón, en cambio, es un problema real y frecuente, y el hardware ya
+lo resolvía (el buzzer del GPIO2). Así que:
+
+- **Acción principal ahora: "SONAR BASTÓN"** (un tap, sin mantener apretado:
+  hacerlo sonar no rompe nada y se corta solo).
+- **El SOS queda como acción secundaria** con hold de 2 s, y ahora manda la
+  ubicación del TELÉFONO (`navigator.geolocation`). La alerta guarda de dónde
+  salió la ubicación y el dashboard lo muestra, para que la familia no salga a
+  buscar al lugar equivocado.
+
+**Cómo funciona el "sonar":** la app escribe `commands/{deviceId}` con un
+`ringToken` nuevo → el bastón lee ese doc cada 5 s (es el **único camino de
+lectura** del firmware; hubo que agregarle `firestoreGet()` a `FirebaseRest`,
+que solo sabía escribir) → pita en grupos de 3 → escribe `ackToken` de vuelta
+para que la app pueda confirmarle al usuario que el bastón SÍ recibió la orden.
+
+### ⚠️ Lo que falta probar en el hardware (no se pudo verificar por software)
+
+1. **Que el pitido se escuche de verdad**, que es la función entera. Usá el test
+   nuevo: `pio run -e test_ring -t upload -t monitor`. Probalo **desde otra
+   habitación, con la puerta cerrada, y con el bastón tapado con una campera o
+   abajo de un sillón**, que es como se pierde en la vida real. Si no se
+   escucha, el buzzer de 5V por transistor no alcanza y hay que pensar en uno
+   más potente: **ahí se cae la función**, así que probalo antes que nada.
+2. **Que el ciclo completo ande:** apretar "SONAR BASTÓN" en el celular y que el
+   bastón pite en ≤ 5 s, y que la app pase de "Esperando que el bastón
+   conteste..." a "El bastón recibió el pedido" (eso confirma que el `ackToken`
+   vuelve).
+3. **Que el GET a Firestore funcione** (`firestoreGet` manda un GET con
+   `Content-Length: 0`; Google debería aceptarlo, pero no se pudo probar contra
+   Firestore real).
+
+### Compromiso que conviene tener en la cabeza
+
+El poll abre una conexión TLS nueva cada 5 s y **bloquea el loop ~1 s**, igual
+que el heartbeat. Mientras tanto **no se mide obstáculos**. Si al probarlo el
+bastón se siente "lento" para avisar obstáculos, subí `RING_POLL_INTERVAL_MS`
+en `config.h` (a costa de que tarde más en empezar a sonar). La solución de
+verdad sería una conexión persistente (MQTT o Firestore Listen) en vez del poll,
+pero eso es bastante más firmware.
 
 ---
 
@@ -96,6 +151,10 @@ pio run -e test_gps -t upload -t monitor
 
 # 5) test COMBINADO obstáculo (HC-SR04 + motor + buzzer juntos, sin WiFi)
 pio run -e test_obstacle -t upload -t monitor
+
+# 6) test del pitido de "encontrar el bastón" (sin WiFi): probalo desde otra
+#    habitación y con el bastón tapado, que es como se pierde de verdad
+pio run -e test_ring -t upload -t monitor
 ```
 
 **Flashear desde el celular (sin cable de datos a la PC):** ver `firmware/FLASH-celular/`
