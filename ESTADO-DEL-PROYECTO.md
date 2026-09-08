@@ -215,6 +215,15 @@ contraseña del WiFi al compilar con credenciales reales).
 - **WiFi de colegio/institución no sirve:** tienen portal cautivo/filtro DNS → el ESP32
   da `DNS Failed` aunque conecte. Compartir por **datos móviles** (apagar el WiFi del
   celular para que el hotspot salga por 4G/5G).
+- **PATCH sin `updateMask` REEMPLAZA el documento entero (Firestore REST):** el
+  heartbeat usaba `firestoreSet()` sobre `devices/{id}`, que hace justamente eso,
+  así que cada 10 s le borraba al documento los campos que solo escribe la app:
+  `ownerUid`, `caregiverUids`, `name` e `inviteCode`. Efecto práctico: el código
+  de invitación dejaba de existir apenas el bastón se ponía online, y con él el
+  emparejamiento de familiares. Ahora va con `firestoreUpdate()` + updateMask.
+  **Ojo:** hace falta reflashear para que el arreglo tenga efecto, y si ya se
+  perdieron esos campos hay que volver a crear/emparejar el círculo desde la app.
+  `firestoreSet()` sigue siendo lo correcto para CREAR el doc de una alerta nueva.
 - **Fix de compilación:** `FirebaseRest.cpp` incluye `../../include/config.h` con ruta
   relativa, porque al compilarse como librería el `include/` del proyecto no está en el CPPPATH.
 - **GPIO12 del CAM** es "strapping": si algo lo deja en HIGH al boot, la placa no arranca.

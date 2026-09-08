@@ -343,7 +343,12 @@ void loop() {
         ",\"lastSeen\":"    + FirebaseRest::fTimestamp(FirebaseRest::isoTimestampNow()) +
         ",\"location\":"    + FirebaseRest::fGeo(g_lat, g_lng) +
         ",\"speed\":"       + FirebaseRest::fDouble(g_speed);
-    fb.firestoreSet(FS_DEVICE_DOC, fields);
+    // updateMask, NO firestoreSet: un PATCH sin updateMask reemplaza el
+    // documento ENTERO en la REST API de Firestore, o sea que este heartbeat
+    // le borraba a devices/{id} los campos que solo escribe la app
+    // (ownerUid, caregiverUids, name, inviteCode) cada 10 segundos.
+    fb.firestoreUpdate(FS_DEVICE_DOC, fields,
+                       "batteryLevel,isOnline,lastSeen,location,speed");
   }
 
   // --- Historial: locations/{id}/history ---
