@@ -20,6 +20,19 @@ import { isDeviceOnline } from "@/lib/device-status";
 import { useNow } from "@/hooks/useNow";
 import type { CommandDoc } from "@/types";
 
+/**
+ * Cuánto hay que mantener apretado para disparar el SOS.
+ *
+ * 3 s es a propósito más que el típico long-press de 500 ms: este botón ocupa
+ * toda la pantalla, así que un roce largo no puede terminar mandándole una
+ * emergencia a la familia. Y le da tiempo al usuario de soltar cuando escucha
+ * el aviso.
+ */
+const SOS_HOLD_MS = 3000;
+
+/** Antes de esto el gesto se siente como un tap común y no decimos nada. */
+const HOLD_FEEDBACK_MS = 600;
+
 export default function BlindPage() {
   return (
     <ProtectedRoute role="blind_user">
@@ -50,9 +63,19 @@ function BlindContent() {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [ringBusy, setRingBusy] = useState(false);
 
-  // --- Estado del SOS de respaldo ---
-  const [sosProgress, setSosProgress] = useState(0);
+  // --- Estado del SOS (ahora es el mismo botón, mantenido apretado) ---
+  const [holdMs, setHoldMs] = useState(0);
   const [sosBusy, setSosBusy] = useState(false);
+  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Un "mantener apretado" CONTIENE un tap: al soltar siempre llega el evento de
+  // release. Esta bandera es la que evita que, después de disparar el SOS (o de
+  // cancelar el gesto), soltar el dedo haga sonar el bastón encima.
+  const suppressTapRef = useRef(false);
+  const holdAnnouncedRef = useRef(false);
+  // Los navegadores móviles emulan eventos de mouse después de un touch. Sin
+  // esta bandera, un solo toque llegaría dos veces (touch + mouse emulado) y el
+  // bastón empezaría a sonar y se pararía solo al instante.
+  const touchActiveRef = useRef(false);
 
   // Mensaje que se anuncia por TTS y se expone en un aria-live para el lector
   // de pantalla (que es, en la práctica, la interfaz real de esta pantalla).
@@ -93,6 +116,8 @@ function BlindContent() {
   }, [secondsLeft]);
 
   const ringing = secondsLeft > 0;
+  // Recién mostramos el SOS cuando el gesto dejó de parecer un tap.
+  const holding = holdMs >= HOLD_FEEDBACK_MS;
 
   const onLogout = async () => {
     await signOut();
@@ -178,7 +203,88 @@ function BlindContent() {
     }
   };
 
-  const sosHold = useHoldToConfirm(setSosProgress, triggerSos, 2000);
+  // ---------------------------------------------------------------------------
+  //  UN SOLO GESTO PARA TODA LA PANTALLA
+  //
+  //  Tocar  -> hacer sonar el bastón (o pararlo si ya está sonando)
+  //  Mantener -> SOS
+  //
+  //  La idea es que el usuario no tenga que BUSCAR nada: toda el área central es
+  //  el botón, así que toca en cualquier lado y funciona. Dos botones separados
+  //  obligaban a acertarle a uno de los dos sin verlos.
+  // ---------------------------------------------------------------------------
+  const clearHold = useCallback(() => {
+    if (holdTimer.current) clearInterval(holdTimer.current);
+    holdTimer.current = null;
+    setHoldMs(0);
+  }, []);
+
+  useEffect(() => clearHold, [clearHold]);
+
+  const onPressStart = (fromTouch: boolean) => {
+    if (fromTouch) touchActiveRef.current = true;
+    else if (touchActiveRef.current) return;   // mouse emulado tras un touch
+    if (holdTimer.current || sosBusy || ringBusy) {
+      suppressTapRef.current = true;   // soltar no dispara nada
+      return;
+    }
+    suppressTapRef.current = false;
+    holdAnnouncedRef.current = false;
+    const startedAt = Date.now();
+    let lastPulse = 0;
+
+    holdTimer.current = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setHoldMs(elapsed);
+
+      // Hasta HOLD_FEEDBACK_MS el gesto se siente como un tap común y no
+      // anunciamos nada, para no hablarle encima a cada toque.
+      if (elapsed >= HOLD_FEEDBACK_MS && !holdAnnouncedRef.current) {
+        holdAnnouncedRef.current = true;
+        speak("Seguí apretando para pedir ayuda. Soltá para hacer sonar el bastón.");
+      }
+      // Un pulso de vibración por segundo: le dice al usuario que el gesto va
+      // avanzando y cuánto le falta, sin depender de la pantalla.
+      if (elapsed >= HOLD_FEEDBACK_MS && elapsed - lastPulse >= 1000) {
+        lastPulse = elapsed;
+        if ("vibrate" in navigator) navigator.vibrate(60);
+      }
+      if (elapsed >= SOS_HOLD_MS) {
+        suppressTapRef.current = true;   // soltar ya no hace sonar el bastón
+        clearHold();
+        void triggerSos();
+      }
+    }, 50);
+  };
+
+  /** El mouse emulado llega ~300 ms después del touch; lo ignoramos por 700 ms. */
+  const touchGuardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releaseTouchGuard = () => {
+    if (touchGuardTimer.current) clearTimeout(touchGuardTimer.current);
+    touchGuardTimer.current = setTimeout(() => {
+      touchActiveRef.current = false;
+      touchGuardTimer.current = null;
+    }, 700);
+  };
+
+  const onPressEnd = (fromTouch: boolean) => {
+    if (!fromTouch && touchActiveRef.current) return;   // mouse emulado tras un touch
+    const suppressed = suppressTapRef.current;
+    clearHold();
+    if (fromTouch) releaseTouchGuard();
+    if (suppressed) return;
+    void onRingToggle();
+  };
+
+  // El dedo/mouse se fue del botón: cancelamos sin disparar nada. Sin esto, un
+  // gesto abortado terminaría haciendo sonar el bastón al soltar.
+  const onPressCancel = (fromTouch: boolean) => {
+    if (!fromTouch && touchActiveRef.current) return;
+    suppressTapRef.current = true;
+    clearHold();
+    if (fromTouch) releaseTouchGuard();
+  };
+
   const switchHold = useHoldToConfirm(setSwitchProgress, confirmSwitchRole, 1500);
 
   async function confirmSwitchRole() {
@@ -250,83 +356,83 @@ function BlindContent() {
         />
       </section>
 
-      {/* ---------------- ACCIÓN PRINCIPAL: encontrar el bastón ---------------- */}
-      <section className="flex-1 flex flex-col items-center justify-center px-6 py-10">
-        <p className="text-2xl font-bold mb-6 text-center" aria-hidden>
-          {ringing ? "Está sonando" : "¿No encontrás el bastón?"}
-        </p>
+      {/* ------------------------------------------------------------------
+          UN SOLO BOTÓN, TODA EL ÁREA CENTRAL.
+          Tocar = sonar el bastón. Mantener apretado = SOS.
+          El usuario no tiene que acertarle a nada: toca donde sea.
+         ------------------------------------------------------------------ */}
+      <section className="flex-1 flex flex-col">
         <button
-          onClick={onRingToggle}
-          disabled={ringBusy}
+          onTouchStart={() => onPressStart(true)}
+          onTouchEnd={() => onPressEnd(true)}
+          onTouchCancel={() => onPressCancel(true)}
+          onMouseDown={() => onPressStart(false)}
+          onMouseUp={() => onPressEnd(false)}
+          onMouseLeave={() => onPressCancel(false)}
+          onContextMenu={(e) => e.preventDefault()}
           aria-label={
             ringing
-              ? "Parar el pitido del bastón"
-              : "Hacer sonar el bastón para encontrarlo. Tocá una vez."
+              ? "Tocá para parar el pitido del bastón. Mantené apretado tres segundos para pedir ayuda."
+              : "Tocá para hacer sonar el bastón y encontrarlo. Mantené apretado tres segundos para pedir ayuda."
           }
-          className={`relative w-72 h-72 rounded-full text-white border-8 border-white flex flex-col items-center justify-center transition-transform duration-150 motion-safe:active:scale-[0.98] disabled:opacity-70 ${
-            ringing ? "bg-amber-500 active:bg-amber-600" : "bg-emerald-600 active:bg-emerald-700"
+          className={`flex-1 w-full flex flex-col items-center justify-center gap-4 px-6 py-10 transition-colors duration-150 select-none touch-none ${
+            sosBusy ? "bg-red-900" : holding ? "bg-red-800" : ringing ? "bg-amber-600" : "bg-emerald-700"
           }`}
-          style={{
-            boxShadow: ringing
-              ? "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(245,158,11,0.5)"
-              : "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(16,185,129,0.5)"
-          }}
         >
-          {ringing ? (
+          {holding ? (
             <>
-              <span className="text-5xl font-black tracking-wide">PARAR</span>
-              <span className="mt-2 text-3xl font-bold tabular-nums" aria-hidden>
+              <span className="text-6xl font-black tracking-wide">SOS</span>
+              <span className="text-3xl font-bold">Seguí apretando</span>
+              {/* Barra gorda: el progreso también tiene que verse de reojo para
+                  quien conserva algo de visión. */}
+              <span className="w-64 h-6 bg-white/25 rounded-full overflow-hidden" aria-hidden>
+                <span
+                  className="block h-full bg-white transition-none"
+                  style={{ width: `${Math.min((holdMs / SOS_HOLD_MS) * 100, 100)}%` }}
+                />
+              </span>
+              <span className="text-2xl font-bold tabular-nums" aria-hidden>
+                {Math.max(Math.ceil((SOS_HOLD_MS - holdMs) / 1000), 0)}
+              </span>
+            </>
+          ) : sosBusy ? (
+            <span className="text-5xl font-black tracking-wide">ENVIANDO...</span>
+          ) : ringing ? (
+            <>
+              <span className="text-6xl font-black tracking-wide">PARAR</span>
+              <span className="text-3xl font-bold tabular-nums" aria-hidden>
                 {secondsLeft}s
               </span>
             </>
           ) : (
-            <span className="text-5xl font-black tracking-wide leading-tight text-center">
-              SONAR
-              <br />
-              BASTÓN
-            </span>
+            <>
+              <span className="text-6xl font-black tracking-wide leading-tight text-center">
+                SONAR
+                <br />
+                BASTÓN
+              </span>
+              <span className="text-2xl font-bold opacity-90 text-center" aria-hidden>
+                Tocá en cualquier lado
+              </span>
+            </>
           )}
         </button>
 
-        <p className="mt-8 text-xl text-center max-w-md">
-          {ringing
-            ? acked
-              ? "El bastón recibió el pedido y está pitando. Seguí el sonido."
-              : "Esperando que el bastón conteste..."
-            : "El bastón pita fuerte para que puedas encontrarlo de oído."}
-        </p>
-
-        {device && !online && (
-          <p className="mt-4 text-lg text-center text-amber-300 max-w-md">
-            El bastón está desconectado (sin WiFi o sin batería), así que no puede
-            sonar. {lastSeenPhrase(device.lastSeen)}
+        <div className="px-6 py-5 border-t-4 border-white space-y-2">
+          <p className="text-xl text-center">
+            {ringing
+              ? acked
+                ? "El bastón recibió el pedido y está pitando. Seguí el sonido."
+                : "Esperando que el bastón conteste..."
+              : "Tocá para que el bastón pite. Mantené apretado para pedir ayuda."}
           </p>
-        )}
-      </section>
-
-      {/* ---------------- ACCIÓN SECUNDARIA: SOS de respaldo ---------------- */}
-      <section className="px-6 py-6 border-t-4 border-white">
-        <button
-          {...sosHold}
-          disabled={sosBusy}
-          aria-label="Emergencia. Mantené apretado dos segundos para avisar a tu familia."
-          className="relative w-full overflow-hidden rounded-2xl bg-red-700 active:bg-red-800 border-4 border-white py-6 disabled:opacity-70"
-        >
-          <span className="text-4xl font-black tracking-wider">SOS</span>
-          <span className="block mt-1 text-lg font-bold" aria-hidden>
-            {sosBusy ? "Enviando..." : "Mantené apretado"}
-          </span>
-          {sosProgress > 0 && (
-            <span
-              className="absolute bottom-0 left-0 h-2 bg-white transition-none"
-              style={{ width: `${sosProgress}%` }}
-            />
+          {device && !online && (
+            <p className="text-lg text-center text-amber-300">
+              El bastón está desconectado, así que no puede sonar.{" "}
+              {lastSeenPhrase(device.lastSeen)}
+            </p>
           )}
-        </button>
-        <p className="mt-4 text-lg text-center">
-          Para una emergencia con el bastón en la mano, usá el botón físico del
-          bastón: es más rápido y además saca foto y graba audio.
-        </p>
+        </div>
       </section>
     </main>
   );

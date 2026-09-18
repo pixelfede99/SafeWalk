@@ -193,7 +193,31 @@ directamente incorrecto:
 Perder el bastón, en cambio, es un problema real y frecuente, y el hardware ya
 lo resolvía: el buzzer del GPIO2.
 
-Cómo funciona:
+### Un solo gesto para toda la pantalla
+
+El área central entera es **un botón**: el usuario no tiene que acertarle a
+nada, toca donde sea.
+
+| Gesto | Qué hace |
+|---|---|
+| Tocar | Hace sonar el bastón (o para el pitido si ya está sonando) |
+| Mantener 3 s | SOS |
+
+Detalles que no son cosméticos:
+
+- **Un "mantener" contiene un tap.** Al soltar siempre llega el evento de
+  release, así que después de disparar el SOS hay que suprimir el tap a mano; si
+  no, soltar el dedo haría sonar el bastón encima de la emergencia.
+- **3 segundos, no 500 ms.** El botón ocupa toda la pantalla: un roce largo no
+  puede terminar mandándole una emergencia a la familia.
+- **A los 600 ms el bastón avisa por voz** ("seguí apretando para pedir ayuda,
+  soltá para hacer sonar el bastón") y vibra una vez por segundo. Sin eso, el
+  usuario no tiene forma de saber en qué parte del gesto está.
+- **Los navegadores móviles emulan eventos de mouse después de un touch.** Sin
+  una bandera que los ignore, un solo toque llegaba dos veces y el bastón
+  empezaba a sonar y se paraba solo al instante.
+
+### Cómo funciona el "sonar"
 
 1. La app escribe `commands/{deviceId}` con un `ringToken` nuevo.
 2. El bastón lee ese doc cada `RING_POLL_INTERVAL_MS` (5 s por defecto) — es el
