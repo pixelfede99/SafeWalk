@@ -29,12 +29,30 @@
 #define ULTRASONIC_INTERVAL_MS    100UL   // cada cuánto medimos distancia (10 Hz)
 #define AUDIO_RECORD_SECONDS       15     // duración de la grabación de la alerta
 
+// Cada cuánto el bastón le pregunta a Firestore si la app le pidió algo
+// ("hacé sonar el buzzer"). ES UN COMPROMISO, no un número mágico:
+//   - Cada consulta abre una conexión TLS nueva y BLOQUEA el loop ~1 s, igual
+//     que el heartbeat. Mientras tanto NO se mide obstáculos.
+//   - Si lo subís, el bastón tarda más en empezar a sonar (y en parar).
+//   - Si lo bajás, el bastón detecta peor los obstáculos mientras camina.
+// 5 s es el punto en el que la espera todavía se banca sin romper el bastón
+// como ayuda para caminar. Un diseño de producción usaría una conexión
+// persistente (MQTT o Firestore Listen) en vez de este poll.
+#define RING_POLL_INTERVAL_MS    5000UL
+
 // ----------------------------------------------------------------------------
 //  PARÁMETROS DE FUNCIONAMIENTO (ajustables)
 // ----------------------------------------------------------------------------
 // Detección de obstáculos: rango en cm donde el motor empieza a vibrar.
 #define OBSTACLE_MAX_CM            150     // a más de esto, el motor no vibra
 #define OBSTACLE_MIN_CM             20     // a menos de esto, vibración máxima/continua
+
+// "Encontrar el bastón": el buzzer pita en ráfagas para poder ubicarlo de oído.
+#define RING_MAX_SECONDS            60     // tope duro: la app no puede pedir más
+#define RING_BEEP_ON_MS            180     // duración de cada pitido
+#define RING_BEEP_OFF_MS           220     // silencio entre pitidos del mismo grupo
+#define RING_BEEP_GROUP              3     // pitidos por grupo
+#define RING_GROUP_PAUSE_MS        700     // pausa entre grupos (ayuda a ubicar la fuente)
 
 // Audio (INMP441 en el ESP32-CAM)
 #define AUDIO_SAMPLE_RATE        16000     // 16 kHz
@@ -110,5 +128,8 @@
 #define FS_DEVICE_DOC      "devices/" SAFEWALK_DEVICE_ID
 #define FS_HISTORY_COLL    "locations/" SAFEWALK_DEVICE_ID "/history"
 #define FS_ALERTS_COLL     "alerts"
+// Órdenes de la app al bastón. Va aparte de devices/{id} a propósito: ese doc
+// lo reescribe el heartbeat cada 10 s y se llevaría puesta la orden.
+#define FS_COMMANDS_DOC    "commands/" SAFEWALK_DEVICE_ID
 // Path de los archivos en Storage: alerts/{deviceId}/{alertId}.jpg | .wav
 #define ST_ALERT_PREFIX    "alerts/" SAFEWALK_DEVICE_ID "/"

@@ -107,6 +107,7 @@ function AlertRow({ alert, onOpen }: { alert: AlertDoc; onOpen: () => void }) {
         <p className="text-xs text-slate-500 truncate">
           {alert.location.lat.toFixed(5)}, {alert.location.lng.toFixed(5)}
         </p>
+        <LocationSourceBadge alert={alert} />
       </div>
 
       <button
@@ -117,6 +118,28 @@ function AlertRow({ alert, onOpen }: { alert: AlertDoc; onOpen: () => void }) {
       </button>
     </li>
   );
+}
+
+/**
+ * De dónde salió la ubicación de la alerta.
+ *
+ * Es información necesaria, no decorativa: el SOS de respaldo de la PWA se
+ * dispara justo cuando el usuario está separado del bastón, y en ese caso el
+ * punto del mapa puede ser el del teléfono (donde está la persona) o el último
+ * conocido del bastón (donde NO está). Sin este cartel, la familia sale a
+ * buscar al lugar equivocado.
+ */
+function LocationSourceBadge({ alert }: { alert: AlertDoc }) {
+  if (alert.source !== "pwa_sos") return null;
+
+  const [text, color] =
+    alert.locationSource === "phone"
+      ? ["Ubicación del teléfono", "text-emerald-400"]
+      : alert.locationSource === "unknown"
+        ? ["Sin ubicación disponible", "text-red-400"]
+        : ["Última ubicación del bastón (puede no ser la de la persona)", "text-amber-400"];
+
+  return <p className={`text-xs mt-1 ${color}`}>Desde la app · {text}</p>;
 }
 
 function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => void }) {
@@ -158,6 +181,7 @@ function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => 
           <div className="rounded-xl overflow-hidden h-56">
             <Map center={alert.location} alertLocation={alert.location} zoom={17} />
           </div>
+          <LocationSourceBadge alert={alert} />
 
           {alert.photoUrl && (
             <div className="space-y-2">

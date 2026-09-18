@@ -1,13 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useDevice } from "@/hooks/useDevice";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { signOut } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { BatteryIcon } from "@/components/BatteryIcon";
-import { createSosAlert, setUserRole } from "@/lib/firestore";
+import {
+  RING_SECONDS,
+  createSosAlert,
+  listenCommand,
+  ringDevice,
+  setUserRole,
+  stopRing
+} from "@/lib/firestore";
+import { getPhoneLocation } from "@/lib/geolocation";
+import { isDeviceOnline } from "@/lib/device-status";
+import { useNow } from "@/hooks/useNow";
+import type { CommandDoc } from "@/types";
 
 export default function BlindPage() {
   return (
@@ -20,45 +31,157 @@ export default function BlindPage() {
 function BlindContent() {
   const router = useRouter();
   const { user, userDoc } = useAuth();
-  const { device } = useDevice(userDoc?.deviceId);
-  const [holdProgress, setHoldProgress] = useState(0);
+  const deviceId = userDoc?.deviceId ?? null;
+  const { device } = useDevice(deviceId);
+
+  // OJO: no usamos device.isOnline directo. Ese campo solo se escribe en true,
+  // así que un bastón apagado figuraba "CONECTADO" para siempre (ver
+  // lib/device-status.ts). El tick del reloj es lo que hace que la pantalla
+  // pase sola a "DESCONECTADO" cuando dejan de llegar heartbeats.
+  const now = useNow();
+  const online = isDeviceOnline(device, now);
+
   const [switchProgress, setSwitchProgress] = useState(0);
   const [switching, setSwitching] = useState(false);
 
+  // --- Estado del "hacer sonar el bastón" ---
+  const [ringToken, setRingToken] = useState<number | null>(null); // el token que pedimos
+  const [command, setCommand] = useState<CommandDoc | null>(null); // lo que ve el bastón
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [ringBusy, setRingBusy] = useState(false);
+
+  // --- Estado del SOS de respaldo ---
+  const [sosProgress, setSosProgress] = useState(0);
+  const [sosBusy, setSosBusy] = useState(false);
+
+  // Mensaje que se anuncia por TTS y se expone en un aria-live para el lector
+  // de pantalla (que es, en la práctica, la interfaz real de esta pantalla).
+  const [status, setStatus] = useState("");
+
+  const announce = useCallback((text: string) => {
+    setStatus(text);
+    speak(text);
+  }, []);
+
   useEffect(() => {
-    // Anuncia el estado por TTS al entrar (lectores de pantalla ya leen el aria-label)
+    // Anuncia el estado al entrar (el lector de pantalla ya lee los aria-label)
     const msg = device
-      ? `Bastón ${device.isOnline ? "conectado" : "desconectado"}, batería al ${device.batteryLevel} por ciento.`
+      ? `Bastón ${online ? "conectado" : "desconectado"}, batería al ${device.batteryLevel} por ciento.`
       : "Conectando con el bastón.";
     speak(msg);
-  }, [device?.isOnline, device?.batteryLevel]);
+  }, [online, device?.batteryLevel]);
+
+  // Escuchamos el doc de órdenes para saber si el bastón confirmó (ackToken).
+  useEffect(() => {
+    if (!deviceId) return;
+    return listenCommand(deviceId, setCommand);
+  }, [deviceId]);
+
+  // El bastón confirmó el pedido que hicimos -> avisamos que SÍ está sonando.
+  const acked = ringToken !== null && command?.ackToken === ringToken;
+  useEffect(() => {
+    if (!acked) return;
+    announce("El bastón está sonando. Seguí el pitido.");
+    if ("vibrate" in navigator) navigator.vibrate(200);
+  }, [acked, announce]);
+
+  // Cuenta regresiva local mientras dura el pitido.
+  useEffect(() => {
+    if (secondsLeft <= 0) return;
+    const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secondsLeft]);
+
+  const ringing = secondsLeft > 0;
 
   const onLogout = async () => {
     await signOut();
     router.replace("/login");
   };
 
-  // Hold-to-confirm de 1.5s para evitar cambios accidentales
-  const onSwitchHoldStart = () => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 100 / 15; // 100% en 1.5s (15 ticks de 100ms)
-      setSwitchProgress(progress);
-      if (progress >= 100) {
-        clearInterval(interval);
-        confirmSwitchRole();
+  // ---------------------------------------------------------------------------
+  //  ENCONTRAR EL BASTÓN (acción principal)
+  //
+  //  Es un tap simple a propósito: hacer sonar el bastón no rompe nada y se
+  //  corta solo, así que pedir "mantené apretado" sería fricción sin motivo.
+  // ---------------------------------------------------------------------------
+  const onRingToggle = async () => {
+    if (!deviceId || !user || ringBusy) return;
+
+    if (ringing) {
+      setRingBusy(true);
+      try {
+        await stopRing(deviceId, user.uid);
+        setSecondsLeft(0);
+        setRingToken(null);
+        announce("Listo, el bastón deja de sonar.");
+      } catch (err) {
+        console.error("Error parando el pitido:", err);
+        announce("No se pudo parar. Se corta solo en unos segundos.");
+      } finally {
+        setRingBusy(false);
       }
-    }, 100);
-    (window as Window & { _switchInterval?: number })._switchInterval = interval as unknown as number;
+      return;
+    }
+
+    if (device && !online) {
+      // El bastón sin WiFi o sin batería no puede sonar: decirlo es más útil
+      // que dejar al usuario esperando un pitido que no va a llegar.
+      announce(
+        `El bastón está desconectado, no puede sonar. ${lastSeenPhrase(device.lastSeen)}`
+      );
+      return;
+    }
+
+    setRingBusy(true);
+    try {
+      const token = await ringDevice(deviceId, user.uid, RING_SECONDS);
+      setRingToken(token);
+      setSecondsLeft(RING_SECONDS);
+      announce("Pedido enviado. El bastón empieza a pitar en unos segundos.");
+    } catch (err) {
+      console.error("Error haciendo sonar el bastón:", err);
+      announce("No se pudo enviar el pedido. Intentá de nuevo.");
+    } finally {
+      setRingBusy(false);
+    }
   };
 
-  const onSwitchHoldEnd = () => {
-    const w = window as Window & { _switchInterval?: number };
-    if (w._switchInterval) clearInterval(w._switchInterval);
-    setSwitchProgress(0);
+  // ---------------------------------------------------------------------------
+  //  SOS DE RESPALDO (acción secundaria)
+  //
+  //  El SOS principal es el botón FÍSICO del bastón: es más rápido y además
+  //  dispara la foto y el audio del ESP32-CAM. Este es el caso "me separé del
+  //  bastón", y por eso manda la ubicación del TELÉFONO, no la del bastón.
+  // ---------------------------------------------------------------------------
+  const triggerSos = async () => {
+    if (!deviceId) {
+      announce("Error: no hay un bastón vinculado a esta cuenta.");
+      return;
+    }
+    setSosBusy(true);
+    announce("Enviando alerta. Buscando tu ubicación.");
+    try {
+      const { location, source } = await getPhoneLocation(device?.location ?? null);
+      await createSosAlert(deviceId, location, source);
+      announce(
+        source === "phone"
+          ? "Alerta enviada con tu ubicación. Tus familiares fueron notificados."
+          : "Alerta enviada. No se pudo obtener tu ubicación, se mandó la última del bastón."
+      );
+      if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
+    } catch (err) {
+      console.error("Error enviando SOS:", err);
+      announce("No se pudo enviar la alerta. Intentá de nuevo.");
+    } finally {
+      setSosBusy(false);
+    }
   };
 
-  const confirmSwitchRole = async () => {
+  const sosHold = useHoldToConfirm(setSosProgress, triggerSos, 2000);
+  const switchHold = useHoldToConfirm(setSwitchProgress, confirmSwitchRole, 1500);
+
+  async function confirmSwitchRole() {
     if (!user || switching) return;
     setSwitching(true);
     try {
@@ -67,47 +190,10 @@ function BlindContent() {
       router.replace("/dashboard");
     } catch (err) {
       console.error("Error cambiando rol:", err);
-      speak("Error al cambiar de modo. Intentá de nuevo.");
+      announce("Error al cambiar de modo. Intentá de nuevo.");
       setSwitching(false);
     }
-  };
-
-  // El SOS de la PWA es secundario; el principal est&#225; en el bot&#243;n f&#237;sico del bast&#243;n.
-  // Igual lo incluimos como respaldo - hold-to-confirm para evitar pulsaciones accidentales.
-  const onSosHoldStart = () => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 5;
-      setHoldProgress(progress);
-      if (progress >= 100) {
-        clearInterval(interval);
-        triggerSos();
-      }
-    }, 100);
-    (window as Window & { _sosInterval?: number })._sosInterval = interval as unknown as number;
-  };
-
-  const onSosHoldEnd = () => {
-    const w = window as Window & { _sosInterval?: number };
-    if (w._sosInterval) clearInterval(w._sosInterval);
-    setHoldProgress(0);
-  };
-
-  const triggerSos = async () => {
-    if (!device) {
-      speak("Error: el bastón no está conectado.");
-      return;
-    }
-    try {
-      const loc = device.location?.lat ? device.location : { lat: 0, lng: 0 };
-      await createSosAlert(device.deviceId, loc);
-      speak("Alerta enviada. Tus familiares fueron notificados.");
-      if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
-    } catch (err) {
-      console.error("Error enviando SOS:", err);
-      speak("No se pudo enviar la alerta. Intentá de nuevo.");
-    }
-  };
+  }
 
   return (
     <main className="min-h-screen bg-black text-white flex flex-col">
@@ -115,11 +201,7 @@ function BlindContent() {
         <h1 className="text-3xl font-black">SafeWalk</h1>
         <div className="flex items-center gap-3">
           <button
-            onTouchStart={onSwitchHoldStart}
-            onTouchEnd={onSwitchHoldEnd}
-            onMouseDown={onSwitchHoldStart}
-            onMouseUp={onSwitchHoldEnd}
-            onMouseLeave={onSwitchHoldEnd}
+            {...switchHold}
             disabled={switching}
             aria-label="Mantené apretado para cambiar a modo familiar"
             className="relative text-xl font-bold underline overflow-hidden px-3 py-2 disabled:opacity-50"
@@ -132,11 +214,7 @@ function BlindContent() {
               />
             )}
           </button>
-          <button
-            onClick={onLogout}
-            aria-label="Cerrar sesión"
-            className="text-xl font-bold underline"
-          >
+          <button onClick={onLogout} aria-label="Cerrar sesión" className="text-xl font-bold underline">
             Salir
           </button>
         </div>
@@ -147,11 +225,16 @@ function BlindContent() {
         </div>
       )}
 
+      {/* El lector de pantalla anuncia solo cualquier cambio de estado. */}
+      <p aria-live="assertive" className="sr-only">
+        {status}
+      </p>
+
       <section className="px-6 py-8 space-y-6 border-b-4 border-white">
         <StatusRow
           label="Bastón"
-          value={device?.isOnline ? "CONECTADO" : "DESCONECTADO"}
-          color={device?.isOnline ? "#10b981" : "#ef4444"}
+          value={online ? "CONECTADO" : "DESCONECTADO"}
+          color={online ? "#10b981" : "#ef4444"}
         />
         <StatusRow
           label="Batería"
@@ -167,43 +250,146 @@ function BlindContent() {
         />
       </section>
 
+      {/* ---------------- ACCIÓN PRINCIPAL: encontrar el bastón ---------------- */}
       <section className="flex-1 flex flex-col items-center justify-center px-6 py-10">
         <p className="text-2xl font-bold mb-6 text-center" aria-hidden>
-          Mantené apretado para SOS
+          {ringing ? "Está sonando" : "¿No encontrás el bastón?"}
         </p>
         <button
-          onTouchStart={onSosHoldStart}
-          onTouchEnd={onSosHoldEnd}
-          onMouseDown={onSosHoldStart}
-          onMouseUp={onSosHoldEnd}
-          onMouseLeave={onSosHoldEnd}
-          aria-label="Botón de emergencia. Mantenelo apretado para enviar alerta."
-          className="relative w-72 h-72 rounded-full bg-red-600 active:bg-red-700 text-white border-8 border-white flex items-center justify-center transition-transform duration-150 motion-safe:active:scale-[0.98]"
+          onClick={onRingToggle}
+          disabled={ringBusy}
+          aria-label={
+            ringing
+              ? "Parar el pitido del bastón"
+              : "Hacer sonar el bastón para encontrarlo. Tocá una vez."
+          }
+          className={`relative w-72 h-72 rounded-full text-white border-8 border-white flex flex-col items-center justify-center transition-transform duration-150 motion-safe:active:scale-[0.98] disabled:opacity-70 ${
+            ringing ? "bg-amber-500 active:bg-amber-600" : "bg-emerald-600 active:bg-emerald-700"
+          }`}
           style={{
-            boxShadow: "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(239,68,68,0.5)"
+            boxShadow: ringing
+              ? "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(245,158,11,0.5)"
+              : "0 0 0 8px rgba(255,255,255,0.15), 0 20px 60px rgba(16,185,129,0.5)"
           }}
         >
-          <span className="text-7xl font-black tracking-wider">SOS</span>
-          {holdProgress > 0 && (
-            <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 100 100">
-              <circle
-                cx="50"
-                cy="50"
-                r="46"
-                stroke="white"
-                strokeWidth="4"
-                fill="none"
-                strokeDasharray={`${(holdProgress * 2.89).toFixed(2)} 1000`}
-              />
-            </svg>
+          {ringing ? (
+            <>
+              <span className="text-5xl font-black tracking-wide">PARAR</span>
+              <span className="mt-2 text-3xl font-bold tabular-nums" aria-hidden>
+                {secondsLeft}s
+              </span>
+            </>
+          ) : (
+            <span className="text-5xl font-black tracking-wide leading-tight text-center">
+              SONAR
+              <br />
+              BASTÓN
+            </span>
           )}
         </button>
+
         <p className="mt-8 text-xl text-center max-w-md">
-          El botón físico del bastón también funciona en cualquier momento.
+          {ringing
+            ? acked
+              ? "El bastón recibió el pedido y está pitando. Seguí el sonido."
+              : "Esperando que el bastón conteste..."
+            : "El bastón pita fuerte para que puedas encontrarlo de oído."}
+        </p>
+
+        {device && !online && (
+          <p className="mt-4 text-lg text-center text-amber-300 max-w-md">
+            El bastón está desconectado (sin WiFi o sin batería), así que no puede
+            sonar. {lastSeenPhrase(device.lastSeen)}
+          </p>
+        )}
+      </section>
+
+      {/* ---------------- ACCIÓN SECUNDARIA: SOS de respaldo ---------------- */}
+      <section className="px-6 py-6 border-t-4 border-white">
+        <button
+          {...sosHold}
+          disabled={sosBusy}
+          aria-label="Emergencia. Mantené apretado dos segundos para avisar a tu familia."
+          className="relative w-full overflow-hidden rounded-2xl bg-red-700 active:bg-red-800 border-4 border-white py-6 disabled:opacity-70"
+        >
+          <span className="text-4xl font-black tracking-wider">SOS</span>
+          <span className="block mt-1 text-lg font-bold" aria-hidden>
+            {sosBusy ? "Enviando..." : "Mantené apretado"}
+          </span>
+          {sosProgress > 0 && (
+            <span
+              className="absolute bottom-0 left-0 h-2 bg-white transition-none"
+              style={{ width: `${sosProgress}%` }}
+            />
+          )}
+        </button>
+        <p className="mt-4 text-lg text-center">
+          Para una emergencia con el bastón en la mano, usá el botón físico del
+          bastón: es más rápido y además saca foto y graba audio.
         </p>
       </section>
     </main>
   );
+}
+
+/**
+ * Hold-to-confirm reutilizable: llena una barra de progreso durante `durationMs`
+ * y recién ahí ejecuta la acción. Evita disparos accidentales en el bolsillo.
+ *
+ * El intervalo se guarda en un ref (antes vivía en `window`, que se pisaba entre
+ * botones y perdía el timer si se desmontaba el componente).
+ */
+function useHoldToConfirm(
+  setProgress: (n: number) => void,
+  onConfirm: () => void | Promise<void>,
+  durationMs: number
+) {
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
+
+  const clear = useCallback(() => {
+    if (timer.current) {
+      clearInterval(timer.current);
+      timer.current = null;
+    }
+    setProgress(0);
+  }, [setProgress]);
+
+  useEffect(() => clear, [clear]);
+
+  const start = useCallback(() => {
+    if (timer.current) return;
+    const ticks = durationMs / 100;
+    let progress = 0;
+    timer.current = setInterval(() => {
+      progress += 100 / ticks;
+      setProgress(Math.min(progress, 100));
+      if (progress >= 100) {
+        clear();
+        void onConfirmRef.current();
+      }
+    }, 100);
+  }, [clear, durationMs, setProgress]);
+
+  return {
+    onTouchStart: start,
+    onTouchEnd: clear,
+    onTouchCancel: clear,
+    onMouseDown: start,
+    onMouseUp: clear,
+    onMouseLeave: clear
+  };
+}
+
+function lastSeenPhrase(lastSeen?: { toDate?: () => Date }): string {
+  const dt = lastSeen?.toDate?.();
+  if (!dt) return "No hay datos de dónde estuvo por última vez.";
+  const mins = Math.round((Date.now() - dt.getTime()) / 60000);
+  if (mins < 1) return "Se lo vio hace menos de un minuto.";
+  if (mins < 60) return `Se lo vio por última vez hace ${mins} minutos.`;
+  const hours = Math.round(mins / 60);
+  return `Se lo vio por última vez hace ${hours} ${hours === 1 ? "hora" : "horas"}.`;
 }
 
 function StatusRow({

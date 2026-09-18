@@ -41,7 +41,10 @@ void loop() {
       ",\"location\":"    + FirebaseRest::fGeo(lat, lng) +
       ",\"speed\":"       + FirebaseRest::fDouble(0.0);
 
-  bool ok = fb.firestoreSet(FS_DEVICE_DOC, fields);
+  // updateMask: sin él, este test le borraría el emparejamiento al dispositivo
+  // (ownerUid, caregiverUids, inviteCode) en cada vuelta.
+  bool ok = fb.firestoreUpdate(FS_DEVICE_DOC, fields,
+                               "batteryLevel,isOnline,lastSeen,location,speed");
   Serial.println(ok ? "Heartbeat OK" : "Heartbeat FALLO");
   delay(HEARTBEAT_INTERVAL_MS);
 }

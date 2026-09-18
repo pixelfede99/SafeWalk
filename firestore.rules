@@ -32,6 +32,12 @@ service cloud.firestore {
       allow read, write: if isSignedIn();
     }
 
+    // Órdenes de la app al bastón (ej. "hacé sonar el buzzer").
+    // Colección aparte de devices/ porque ese doc lo reescribe el heartbeat.
+    match /commands/{deviceId} {
+      allow read, write: if isSignedIn();
+    }
+
     // ============================================================
     // REGLAS ESTRICTAS DE PRODUCCIÓN (para usar más adelante)
     // ------------------------------------------------------------
@@ -61,6 +67,19 @@ service cloud.firestore {
     //   allow read: if isSignedIn();
     //   allow update: if isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen','seenBy']);
     //   allow create, delete: if false; // solo el ESP32
+    // }
+    //
+    // match /commands/{deviceId} {
+    //   allow read: if isSignedIn();   // el bastón lee su propia orden
+    //   // Solo el dueño o un familiar del círculo puede hacer sonar el bastón,
+    //   // y solo puede tocar los campos de la orden (no inventar otros).
+    //   allow write: if isSignedIn()
+    //     && exists(/databases/$(database)/documents/devices/$(deviceId))
+    //     && (
+    //       get(/databases/$(database)/documents/devices/$(deviceId)).data.ownerUid == request.auth.uid ||
+    //       request.auth.uid in get(/databases/$(database)/documents/devices/$(deviceId)).data.caregiverUids
+    //     )
+    //     && request.resource.data.keys().hasOnly(['deviceId','ringToken','ringSeconds','requestedBy','updatedAt','ackToken']);
     // }
   }
 }

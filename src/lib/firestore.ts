@@ -18,7 +18,7 @@ import {
   type Unsubscribe
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint } from "@/types";
+import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint, CommandDoc } from "@/types";
 
 // Genera un código de invitación de 6 chars (sin caracteres ambiguos)
 export function generateInviteCode(): string {
@@ -151,10 +151,17 @@ export async function leaveDevice(
   return nextActive;
 }
 
-/** Crea una alerta desde la PWA (botón SOS de respaldo). */
+/**
+ * Crea una alerta desde la PWA (botón SOS de respaldo).
+ *
+ * `locationSource` NO es cosmético: este SOS se usa cuando el usuario está
+ * separado del bastón, así que la familia tiene que poder distinguir "esta es
+ * la posición del teléfono" de "esta es la última posición conocida del bastón".
+ */
 export async function createSosAlert(
   deviceId: string,
-  location: { lat: number; lng: number }
+  location: { lat: number; lng: number },
+  locationSource: "device" | "phone" | "unknown" = "device"
 ): Promise<void> {
   await addDoc(collection(db, "alerts"), {
     deviceId,
@@ -163,7 +170,55 @@ export async function createSosAlert(
     photoUrl: "",
     audioUrl: "",
     seen: false,
-    source: "pwa_sos" // diferenciador del SOS físico del ESP32
+    source: "pwa_sos", // diferenciador del SOS físico del ESP32
+    locationSource
+  });
+}
+
+// ----------------- COMMANDS (órdenes de la app al bastón) -----------------
+
+/** Tope de segundos que pedimos por vez. El firmware también lo limita. */
+export const RING_SECONDS = 30;
+
+/**
+ * Hace sonar el buzzer del bastón para poder encontrarlo de oído.
+ *
+ * Escribimos en `commands/{deviceId}` y no en `devices/{deviceId}` porque ese
+ * último lo reescribe el heartbeat del ESP32 cada 10 s.
+ *
+ * `ringToken` es un nonce, no una marca de tiempo a comparar: el firmware solo
+ * chequea si cambió respecto del último que leyó. Así la función anda igual
+ * aunque el reloj del celular esté desfasado.
+ */
+export async function ringDevice(
+  deviceId: string,
+  requestedBy: string,
+  seconds: number = RING_SECONDS
+): Promise<number> {
+  const ringToken = Date.now();
+  await setDoc(
+    doc(db, "commands", deviceId),
+    {
+      deviceId,
+      ringToken,
+      ringSeconds: seconds,
+      requestedBy,
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+  // Lo devolvemos para que la pantalla pueda esperar el `ackToken` del bastón.
+  return ringToken;
+}
+
+/** Corta el pitido antes de que se cumpla el tiempo (mismo camino, con 0 s). */
+export async function stopRing(deviceId: string, requestedBy: string): Promise<number> {
+  return ringDevice(deviceId, requestedBy, 0);
+}
+
+export function listenCommand(deviceId: string, cb: (c: CommandDoc | null) => void): Unsubscribe {
+  return onSnapshot(doc(db, "commands", deviceId), (snap) => {
+    cb(snap.exists() ? (snap.data() as CommandDoc) : null);
   });
 }
 

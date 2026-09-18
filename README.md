@@ -111,7 +111,21 @@ alerts/{alertId}
   - audioUrl: string  (Firebase Storage)
   - seen: boolean
   - seenBy?: string[]
+  - source?: "device" | "pwa_sos"           # boton fisico del baston vs SOS de la app
+  - locationSource?: "device"|"phone"|"unknown"   # de donde salio `location`
+
+commands/{deviceId}          # ordenes de la APP -> BASTON (unico camino de ida)
+  - ringToken: number        # nonce; el baston actua cuando cambia
+  - ringSeconds: number      # cuanto sonar (0 = parar)
+  - requestedBy: string      # uid de quien lo pidio
+  - updatedAt: timestamp
+  - ackToken?: number        # eco que escribe el BASTON al ejecutar la orden
 ```
+
+> **Por qué `commands/` es una colección aparte y no un campo de `devices/`:**
+> el heartbeat del ESP32 hace un PATCH **sin `updateMask`** sobre
+> `devices/{deviceId}`, y eso en la REST API de Firestore reemplaza el documento
+> entero. Una orden guardada ahí duraría menos de 10 segundos.
 
 ## Qué tiene que hacer el ESP32
 
@@ -164,6 +178,49 @@ POST .../documents/alerts
 ```
 
 La PWA tiene un listener real-time y va a mostrar el banner instantáneamente.
+
+## Encontrar el bastón (modo no vidente)
+
+La pantalla del usuario no vidente tiene como acción principal **hacer sonar el
+bastón**, no el SOS. El motivo es que el SOS de la app era redundante o
+directamente incorrecto:
+
+- con el bastón en la mano, el **botón físico** es más rápido y además dispara
+  la foto y el audio del ESP32-CAM;
+- sin el bastón, la app mandaba `device.location`, o sea la posición **del
+  bastón**, no la del usuario, que es justo el caso en que se usaría.
+
+Perder el bastón, en cambio, es un problema real y frecuente, y el hardware ya
+lo resolvía: el buzzer del GPIO2.
+
+Cómo funciona:
+
+1. La app escribe `commands/{deviceId}` con un `ringToken` nuevo.
+2. El bastón lee ese doc cada `RING_POLL_INTERVAL_MS` (5 s por defecto) — es el
+   **único camino de lectura** del firmware, todo lo demás es escritura.
+3. Si el token cambió, hace pitar el buzzer en grupos de 3 durante `ringSeconds`
+   (tope de `RING_MAX_SECONDS`), sin bloquear el loop.
+4. El bastón escribe `ackToken` de vuelta, y recién ahí la app le dice al
+   usuario que **está sonando de verdad**. Sin ese eco la pantalla estaría
+   afirmando algo que el usuario no puede verificar mirando.
+
+Limitaciones que conviene tener presentes:
+
+- **El GPS no sirve para esto.** Adentro de una casa no hay fix. Lo que
+  encuentra el bastón es el sonido; el mapa solo sirve para "me lo dejé en otro
+  edificio".
+- **Si el bastón está sin batería o sin WiFi, no suena.** La app lo detecta por
+  `isOnline` y lo dice, en vez de dejar al usuario esperando un pitido que no va
+  a llegar. En ese caso ofrece la última ubicación conocida.
+- **El poll bloquea el loop ~1 s** (handshake TLS), igual que el heartbeat.
+  Mientras tanto no se mide obstáculos. `RING_POLL_INTERVAL_MS` es el botón para
+  ajustar ese compromiso; una versión de producción usaría una conexión
+  persistente (MQTT o Firestore Listen) en vez del poll.
+
+El SOS sigue estando, como acción secundaria con hold-to-confirm de 2 s, pero
+ahora manda la ubicación del **teléfono** (`navigator.geolocation`) y marca en
+la alerta de dónde salió, para que la familia no salga a buscar al lugar
+equivocado.
 
 ## Page Visibility — ahorro de cuota Firestore
 

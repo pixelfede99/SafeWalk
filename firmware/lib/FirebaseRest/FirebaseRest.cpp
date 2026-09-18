@@ -238,6 +238,29 @@ bool FirebaseRest::firestoreAdd(const String& collectionPath, const String& fiel
 }
 
 // ----------------------------------------------------------------------------
+//  LECTURA (el bastón escuchando órdenes de la app)
+//
+//  Hasta ahora el firmware solo ESCRIBÍA a Firestore. Esto agrega el camino de
+//  vuelta, que es lo que permite que la app le pida algo al bastón (ej. "sonar
+//  para que te encuentre").
+//
+//  Costo a tener en cuenta: cada llamada abre una conexión TLS nueva, igual que
+//  el heartbeat, y eso BLOQUEA el loop ~1 s. Por eso el poll no es cada 100 ms
+//  sino cada RING_POLL_INTERVAL_MS (ver config.h).
+// ----------------------------------------------------------------------------
+bool FirebaseRest::firestoreGet(const String& docPath, String& outJson) {
+  ensureToken();
+  int code;
+  // GET sin body: httpJson manda Content-Length: 0, que Google acepta.
+  bool ok = httpJson(HOST_FS, fsDocPath(docPath), "GET", "", outJson, code, true);
+  // El 404 es esperable y NO es un error: significa que la app todavía no
+  // escribió ninguna orden para este bastón. No lo logueamos para no ensuciar
+  // el serial cada pocos segundos.
+  if (!ok && code != 404) Serial.printf("[FB] firestoreGet (%d): %s\n", code, outJson.c_str());
+  return ok;
+}
+
+// ----------------------------------------------------------------------------
 //  Storage  (upload vía REST: POST /v0/b/{bucket}/o?name=<urlencoded path>)
 //  La respuesta trae downloadTokens; armamos la URL pública con ?alt=media&token=
 // ----------------------------------------------------------------------------
