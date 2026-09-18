@@ -4,8 +4,16 @@ import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import type { DeviceDoc } from "@/types";
 import { BatteryIcon } from "./BatteryIcon";
+import { isDeviceOnline } from "@/lib/device-status";
+import { useNow } from "@/hooks/useNow";
 
 export function DevicePanel({ device }: { device: DeviceDoc | null }) {
+  // El tick hace que el panel pase solo a "Offline" cuando el bastón deja de
+  // mandar heartbeats: si esperáramos un snapshot de Firestore no llegaría
+  // nunca, justamente porque está desconectado.
+  const now = useNow();
+  const online = isDeviceOnline(device, now);
+
   if (!device) {
     return (
       <div className="bg-bg-card border border-white/5 rounded-2xl p-4 animate-pulse">
@@ -27,7 +35,7 @@ export function DevicePanel({ device }: { device: DeviceDoc | null }) {
           <p className="text-xs text-slate-400 uppercase tracking-wider">Bastón</p>
           <p className="text-lg font-semibold">{device.name}</p>
         </div>
-        <StatusPill online={device.isOnline} />
+        <StatusPill online={online} />
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -41,7 +49,7 @@ export function DevicePanel({ device }: { device: DeviceDoc | null }) {
           }
         />
         <Metric label="Velocidad" value={`${device.speed.toFixed(1)} m/s`} />
-        <Metric label="Última vez" value={device.isOnline ? "ahora" : lastSeenStr} />
+        <Metric label="Última vez" value={online ? "ahora" : lastSeenStr} />
       </div>
     </div>
   );

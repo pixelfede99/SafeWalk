@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { getDevices, switchActiveDevice } from "@/lib/firestore";
+import { isDeviceOnline } from "@/lib/device-status";
+import { useNow } from "@/hooks/useNow";
 import type { DeviceDoc } from "@/types";
 
 interface Props {
@@ -15,6 +17,7 @@ export function CircleSwitcher({ uid, deviceIds, activeDeviceId }: Props) {
   const [open, setOpen] = useState(false);
   const [devices, setDevices] = useState<DeviceDoc[]>([]);
   const [switching, setSwitching] = useState<string | null>(null);
+  const now = useNow();
 
   useEffect(() => {
     if (deviceIds.length === 0) return;
@@ -80,7 +83,7 @@ export function CircleSwitcher({ uid, deviceIds, activeDeviceId }: Props) {
                   >
                     <span
                       className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        d.isOnline ? "bg-success" : "bg-slate-500"
+                        isDeviceOnline(d, now) ? "bg-success" : "bg-slate-500"
                       }`}
                     />
                     <span className="flex-1 truncate">{d.name}</span>

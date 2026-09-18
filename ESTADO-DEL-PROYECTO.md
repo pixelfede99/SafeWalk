@@ -215,6 +215,15 @@ contraseña del WiFi al compilar con credenciales reales).
 - **WiFi de colegio/institución no sirve:** tienen portal cautivo/filtro DNS → el ESP32
   da `DNS Failed` aunque conecte. Compartir por **datos móviles** (apagar el WiFi del
   celular para que el hotspot salga por 4G/5G).
+- **`isOnline` solo se escribe en `true`:** el firmware lo manda `true` en cada
+  heartbeat y nadie lo pone nunca en `false`, así que un bastón apagado seguía
+  figurando "CONECTADO" en la app para siempre. No tiene arreglo del lado del
+  firmware (un bastón apagado no puede avisar que se apagó): la señal de que
+  está muerto es la AUSENCIA de heartbeat. Ahora la app lo deduce de `lastSeen`
+  (`src/lib/device-status.ts`, 35 s de tolerancia = 3.5 heartbeats). Hace falta
+  un tick de reloj (`useNow`) porque si no, no llega ningún snapshot que dispare
+  el re-render — justamente porque está desconectado. **Si cambiás
+  `HEARTBEAT_INTERVAL_MS` en config.h, cambiá `OFFLINE_AFTER_MS` también.**
 - **PATCH sin `updateMask` REEMPLAZA el documento entero (Firestore REST):** el
   heartbeat usaba `firestoreSet()` sobre `devices/{id}`, que hace justamente eso,
   así que cada 10 s le borraba al documento los campos que solo escribe la app:

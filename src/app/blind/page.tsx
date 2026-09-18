@@ -16,6 +16,8 @@ import {
   stopRing
 } from "@/lib/firestore";
 import { getPhoneLocation } from "@/lib/geolocation";
+import { isDeviceOnline } from "@/lib/device-status";
+import { useNow } from "@/hooks/useNow";
 import type { CommandDoc } from "@/types";
 
 export default function BlindPage() {
@@ -31,6 +33,13 @@ function BlindContent() {
   const { user, userDoc } = useAuth();
   const deviceId = userDoc?.deviceId ?? null;
   const { device } = useDevice(deviceId);
+
+  // OJO: no usamos device.isOnline directo. Ese campo solo se escribe en true,
+  // así que un bastón apagado figuraba "CONECTADO" para siempre (ver
+  // lib/device-status.ts). El tick del reloj es lo que hace que la pantalla
+  // pase sola a "DESCONECTADO" cuando dejan de llegar heartbeats.
+  const now = useNow();
+  const online = isDeviceOnline(device, now);
 
   const [switchProgress, setSwitchProgress] = useState(0);
   const [switching, setSwitching] = useState(false);
@@ -57,10 +66,10 @@ function BlindContent() {
   useEffect(() => {
     // Anuncia el estado al entrar (el lector de pantalla ya lee los aria-label)
     const msg = device
-      ? `Bastón ${device.isOnline ? "conectado" : "desconectado"}, batería al ${device.batteryLevel} por ciento.`
+      ? `Bastón ${online ? "conectado" : "desconectado"}, batería al ${device.batteryLevel} por ciento.`
       : "Conectando con el bastón.";
     speak(msg);
-  }, [device?.isOnline, device?.batteryLevel]);
+  }, [online, device?.batteryLevel]);
 
   // Escuchamos el doc de órdenes para saber si el bastón confirmó (ackToken).
   useEffect(() => {
@@ -115,7 +124,7 @@ function BlindContent() {
       return;
     }
 
-    if (device && !device.isOnline) {
+    if (device && !online) {
       // El bastón sin WiFi o sin batería no puede sonar: decirlo es más útil
       // que dejar al usuario esperando un pitido que no va a llegar.
       announce(
@@ -224,8 +233,8 @@ function BlindContent() {
       <section className="px-6 py-8 space-y-6 border-b-4 border-white">
         <StatusRow
           label="Bastón"
-          value={device?.isOnline ? "CONECTADO" : "DESCONECTADO"}
-          color={device?.isOnline ? "#10b981" : "#ef4444"}
+          value={online ? "CONECTADO" : "DESCONECTADO"}
+          color={online ? "#10b981" : "#ef4444"}
         />
         <StatusRow
           label="Batería"
@@ -287,7 +296,7 @@ function BlindContent() {
             : "El bastón pita fuerte para que puedas encontrarlo de oído."}
         </p>
 
-        {device && !device.isOnline && (
+        {device && !online && (
           <p className="mt-4 text-lg text-center text-amber-300 max-w-md">
             El bastón está desconectado (sin WiFi o sin batería), así que no puede
             sonar. {lastSeenPhrase(device.lastSeen)}
