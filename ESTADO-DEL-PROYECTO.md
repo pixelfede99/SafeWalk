@@ -121,13 +121,32 @@ pero eso es bastante más firmware.
      motor a otro pin (ej. GPIO14, libre) en `config.h` (`PIN_MOTOR`).
 
 ### Otros pendientes de hardware
-- **ESP32-CAM:** no se puede flashear todavía (no tiene USB). Falta un **adaptador FTDI**
-  o la plaquita **ESP32-CAM-MB**.
+- **ESP32-CAM:** ✅ **destrabado** — ya hay un adaptador USB-serie. Falta hacerlo:
+  el cableado y la secuencia están en `firmware/FLASHEO.md`.
 - **Micrófono INMP441:** va en el **ESP32-CAM** (no en el DevKit): VDD→3.3V, GND, L/R→GND,
   WS→GPIO4, SCK→GPIO12, SD→GPIO13.
 - **Alimentación:** comprar un **TP4056 CON protección** (DW01+FS8205, con pads OUT+/OUT−
   separados de B+/B−); el básico de 4 pines no protege la batería. **MT3608:** ajustar el
   trimpot a **5.0V midiendo con multímetro ANTES** de conectarlo al ESP32.
+
+---
+
+## ⏭️ Lo próximo, en orden (cuando tengas el cable y la placa)
+
+Guía completa con cableado y errores comunes: **`firmware/FLASHEO.md`**.
+
+1. **`pio run -e test_ring -t upload -t monitor`** — escuchá el pitido desde otra
+   habitación, con la puerta cerrada y el bastón tapado con ropa. **Esta prueba
+   decide si la función sirve.** Si no se escucha, hay que cambiar el buzzer.
+2. **`pio run -e devkit -t upload`** — deja el bastón con "encontrar el bastón" y
+   con el arreglo del heartbeat. Si el `inviteCode` ya se había perdido, hay que
+   rehacer el emparejamiento desde la app (el arreglo evita que vuelva a pasar,
+   no recupera lo borrado).
+3. **Ciclo completo**: tocar el botón en la app y que el bastón pite en ≤ 5 s, y
+   que la pantalla pase a "El bastón recibió el pedido".
+4. **ESP32-CAM**: con el adaptador USB-serie, primero `test_camera` y después
+   `esp32cam`. Acordate de desconectar el hilo del DevKit a GPIO3 y de poner
+   GPIO0 a GND para flashear.
 
 ---
 

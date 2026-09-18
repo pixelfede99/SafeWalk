@@ -126,7 +126,12 @@ No hay hilo de retorno: el ESP32-CAM "responde" escribiendo las URLs en Firestor
 
 ## Cómo compilar y flashear
 
-Requisitos: **VS Code + extensión PlatformIO** (no Arduino IDE).
+> Para el paso a paso completo — cableado del adaptador USB-serie para el
+> ESP32-CAM, alimentación, secuencia de GPIO0 y errores comunes — mirá
+> **[FLASHEO.md](FLASHEO.md)**. Acá queda el resumen.
+
+Requisitos: **VS Code + extensión PlatformIO** (no Arduino IDE), o
+`pip install platformio` y usar la CLI.
 
 ```bash
 # 1) credenciales (ver sección Seguridad)
