@@ -58,6 +58,19 @@ body {
   border: 4px solid #fff;
 }
 
+/*
+ * Pantalla que no se mueve ni se selecciona (modo no vidente).
+ * Un "mantener apretado" en el celular, sin esto, selecciona el texto o abre el
+ * menú contextual del navegador y el gesto se corta a la mitad.
+ */
+.no-select-screen {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
 /* Spinner más rápido → la app se *percibe* más veloz aunque la carga sea igual. */
 .spin-fast {
   animation: spin 0.7s linear infinite;
