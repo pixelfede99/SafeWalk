@@ -77,6 +77,19 @@ function BlindContent() {
   // bastón empezaría a sonar y se pararía solo al instante.
   const touchActiveRef = useRef(false);
 
+  // El <main> es fixed, pero el body sigue midiendo 100vh (más alto que lo
+  // visible en el celu) y se podía arrastrar por debajo. Mientras estamos en
+  // esta pantalla trabamos el scroll del documento.
+  useEffect(() => {
+    const html = document.documentElement;
+    const prev = [html.style.overflow, document.body.style.overflow];
+    html.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    return () => {
+      [html.style.overflow, document.body.style.overflow] = prev;
+    };
+  }, []);
+
   // Mensaje que se anuncia por TTS y se expone en un aria-live para el lector
   // de pantalla (que es, en la práctica, la interfaz real de esta pantalla).
   const [status, setStatus] = useState("");
@@ -302,15 +315,18 @@ function BlindContent() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white flex flex-col">
-      <header className="px-6 py-5 flex items-center justify-between border-b-4 border-white gap-3">
-        <h1 className="text-3xl font-black">SafeWalk</h1>
-        <div className="flex items-center gap-3">
+    // `fixed inset-0`: la pantalla queda clavada al tamaño del celular. Con
+    // min-h-screen (100vh) en el celu sobraba el alto de la barra del navegador
+    // y todo se podía arrastrar para abajo y para los costados.
+    <main className="no-select-screen fixed inset-0 overflow-hidden bg-black text-white flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+      <header className="relative shrink-0 pl-4 pr-2 py-3 short:py-2 flex items-center justify-between border-b-4 border-white gap-2">
+        <h1 className="text-[clamp(1.25rem,6vw,1.875rem)] font-black">SafeWalk</h1>
+        <div className="flex items-center">
           <button
             {...switchHold}
             disabled={switching}
             aria-label="Mantené apretado para cambiar a modo familiar"
-            className="relative text-xl font-bold underline overflow-hidden px-3 py-2 disabled:opacity-50"
+            className="relative text-lg sm:text-xl font-bold underline whitespace-nowrap overflow-hidden px-2 py-2 touch-none select-none disabled:opacity-50"
           >
             Modo familiar
             {switchProgress > 0 && (
@@ -320,23 +336,29 @@ function BlindContent() {
               />
             )}
           </button>
-          <button onClick={onLogout} aria-label="Cerrar sesión" className="text-xl font-bold underline">
+          <button
+            onClick={onLogout}
+            aria-label="Cerrar sesión"
+            className="text-lg sm:text-xl font-bold underline px-2 py-2"
+          >
             Salir
           </button>
         </div>
+        {/* Flota encima en vez de empujar: si ocupara lugar, todo el botón
+            grande se correría para abajo mientras el dedo está apretando. */}
+        {switchProgress > 0 && switchProgress < 100 && (
+          <div className="absolute left-0 right-0 top-full z-10 bg-yellow-400 text-black text-center font-bold text-lg py-1">
+            Seguí apretando...
+          </div>
+        )}
       </header>
-      {switchProgress > 0 && switchProgress < 100 && (
-        <div className="bg-yellow-400 text-black text-center font-bold text-xl py-2">
-          Mantené apretado para cambiar de modo...
-        </div>
-      )}
 
       {/* El lector de pantalla anuncia solo cualquier cambio de estado. */}
       <p aria-live="assertive" className="sr-only">
         {status}
       </p>
 
-      <section className="px-6 py-8 space-y-6 border-b-4 border-white">
+      <section className="shrink-0 px-4 py-4 short:py-2 space-y-2 border-b-4 border-white">
         <StatusRow
           label="Bastón"
           value={online ? "CONECTADO" : "DESCONECTADO"}
@@ -361,7 +383,7 @@ function BlindContent() {
           Tocar = sonar el bastón. Mantener apretado = SOS.
           El usuario no tiene que acertarle a nada: toca donde sea.
          ------------------------------------------------------------------ */}
-      <section className="flex-1 flex flex-col">
+      <section className="flex-1 min-h-0 flex flex-col">
         <button
           onTouchStart={() => onPressStart(true)}
           onTouchEnd={() => onPressEnd(true)}
@@ -375,17 +397,17 @@ function BlindContent() {
               ? "Tocá para parar el pitido del bastón. Mantené apretado tres segundos para pedir ayuda."
               : "Tocá para hacer sonar el bastón y encontrarlo. Mantené apretado tres segundos para pedir ayuda."
           }
-          className={`flex-1 w-full flex flex-col items-center justify-center gap-4 px-6 py-10 transition-colors duration-150 select-none touch-none ${
+          className={`flex-1 min-h-0 w-full overflow-hidden flex flex-col items-center justify-center gap-4 short:gap-2 px-4 py-4 transition-colors duration-150 select-none touch-none ${
             sosBusy ? "bg-red-900" : holding ? "bg-red-800" : ringing ? "bg-amber-600" : "bg-emerald-700"
           }`}
         >
           {holding ? (
             <>
-              <span className="text-6xl font-black tracking-wide">SOS</span>
-              <span className="text-3xl font-bold">Seguí apretando</span>
+              <span className="text-6xl short:text-5xl font-black tracking-wide">SOS</span>
+              <span className="text-3xl short:text-2xl font-bold">Seguí apretando</span>
               {/* Barra gorda: el progreso también tiene que verse de reojo para
                   quien conserva algo de visión. */}
-              <span className="w-64 h-6 bg-white/25 rounded-full overflow-hidden" aria-hidden>
+              <span className="w-64 max-w-full h-6 bg-white/25 rounded-full overflow-hidden" aria-hidden>
                 <span
                   className="block h-full bg-white transition-none"
                   style={{ width: `${Math.min((holdMs / SOS_HOLD_MS) * 100, 100)}%` }}
@@ -399,27 +421,27 @@ function BlindContent() {
             <span className="text-5xl font-black tracking-wide">ENVIANDO...</span>
           ) : ringing ? (
             <>
-              <span className="text-6xl font-black tracking-wide">PARAR</span>
+              <span className="text-6xl short:text-5xl font-black tracking-wide">PARAR</span>
               <span className="text-3xl font-bold tabular-nums" aria-hidden>
                 {secondsLeft}s
               </span>
             </>
           ) : (
             <>
-              <span className="text-6xl font-black tracking-wide leading-tight text-center">
+              <span className="text-6xl short:text-5xl font-black tracking-wide leading-tight text-center">
                 SONAR
                 <br />
                 BASTÓN
               </span>
-              <span className="text-2xl font-bold opacity-90 text-center" aria-hidden>
+              <span className="text-2xl short:text-xl font-bold opacity-90 text-center" aria-hidden>
                 Tocá en cualquier lado
               </span>
             </>
           )}
         </button>
 
-        <div className="px-6 py-5 border-t-4 border-white space-y-2">
-          <p className="text-xl text-center">
+        <div className="shrink-0 px-4 py-3 short:py-2 border-t-4 border-white space-y-1">
+          <p className="text-lg short:text-base text-center leading-snug">
             {ringing
               ? acked
                 ? "El bastón recibió el pedido y está pitando. Seguí el sonido."
@@ -427,7 +449,7 @@ function BlindContent() {
               : "Tocá para que el bastón pite. Mantené apretado para pedir ayuda."}
           </p>
           {device && !online && (
-            <p className="text-lg text-center text-amber-300">
+            <p className="text-base text-center leading-snug text-amber-300">
               El bastón está desconectado, así que no puede sonar.{" "}
               {lastSeenPhrase(device.lastSeen)}
             </p>
@@ -478,13 +500,17 @@ function useHoldToConfirm(
     }, 100);
   }, [clear, durationMs, setProgress]);
 
+  // Pointer events en vez de touch + mouse: un solo evento por gesto (el mouse
+  // emulado después del touch volvía a arrancar el timer). Con el dedo, el
+  // navegador captura el puntero en el botón, así que un movimiento chico no
+  // lo cancela. preventDefault en contextmenu evita que el "mantener apretado"
+  // abra el menú del navegador o seleccione texto en vez de seguir contando.
   return {
-    onTouchStart: start,
-    onTouchEnd: clear,
-    onTouchCancel: clear,
-    onMouseDown: start,
-    onMouseUp: clear,
-    onMouseLeave: clear
+    onPointerDown: start,
+    onPointerUp: clear,
+    onPointerCancel: clear,
+    onPointerLeave: clear,
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault()
   };
 }
 
@@ -495,7 +521,10 @@ function lastSeenPhrase(lastSeen?: { toDate?: () => Date }): string {
   if (mins < 1) return "Se lo vio hace menos de un minuto.";
   if (mins < 60) return `Se lo vio por última vez hace ${mins} minutos.`;
   const hours = Math.round(mins / 60);
-  return `Se lo vio por última vez hace ${hours} ${hours === 1 ? "hora" : "horas"}.`;
+  if (hours < 48) {
+    return `Se lo vio por última vez hace ${hours} ${hours === 1 ? "hora" : "horas"}.`;
+  }
+  return `Se lo vio por última vez hace ${Math.round(hours / 24)} días.`;
 }
 
 function StatusRow({
@@ -510,9 +539,14 @@ function StatusRow({
   extra?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline justify-between">
-      <span className="text-2xl font-bold uppercase">{label}</span>
-      <span className="text-4xl font-black flex items-center" style={{ color }}>
+    // flex-wrap + tamaño relativo al ancho: "DESCONECTADO" en text-4xl no
+    // entraba al lado de la etiqueta y empujaba la página hacia el costado.
+    <div className="flex flex-wrap items-center justify-between gap-x-3">
+      <span className="text-xl sm:text-2xl font-bold uppercase">{label}</span>
+      <span
+        className="text-[clamp(1.5rem,7.5vw,2.25rem)] font-black flex items-center"
+        style={{ color }}
+      >
         {value}
         {extra}
       </span>

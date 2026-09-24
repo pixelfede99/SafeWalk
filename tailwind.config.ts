@@ -5,6 +5,12 @@ const config: Config = {
   darkMode: "class",
   theme: {
     extend: {
+      screens: {
+        // Celulares de pantalla baja (o con la barra del navegador ocupando
+        // lugar). La pantalla del no vidente no scrollea, así que ahí achicamos
+        // márgenes y letra para que todo entre.
+        short: { raw: "(max-height: 700px)" }
+      },
       colors: {
         bg: {
           DEFAULT: "#0a0d14",
