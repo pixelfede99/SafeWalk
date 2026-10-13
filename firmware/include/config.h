@@ -133,3 +133,9 @@
 #define FS_COMMANDS_DOC    "commands/" SAFEWALK_DEVICE_ID
 // Path de los archivos en Storage: alerts/{deviceId}/{alertId}.jpg | .wav
 #define ST_ALERT_PREFIX    "alerts/" SAFEWALK_DEVICE_ID "/"
+
+// ----------------------------------------------------------------------------
+//  PUSH — la app web (Vercel) manda la notificación FCM a la familia.
+//  El DevKit hace POST https://NOTIFY_HOST/api/notify {alertId} tras crear la alerta.
+// ----------------------------------------------------------------------------
+#define NOTIFY_HOST        "safe-walk-mauve.vercel.app"

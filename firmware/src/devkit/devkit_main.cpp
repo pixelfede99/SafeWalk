@@ -31,6 +31,8 @@
 #include <Wire.h>
 #include <TinyGPSPlus.h>
 #include <ArduinoJson.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include "config.h"
 #include "FirebaseRest.h"
 
@@ -54,8 +56,10 @@ uint32_t g_lastHeartbeat = 0, g_lastHistory = 0, g_lastUltra = 0;
 #define REG_INT_PIN_CFG 0x37
 #define REG_INT_ENABLE 0x38
 #define REG_INT_STATUS 0x3A
+#define REG_WHO_AM_I 0x75
 
 volatile bool g_fallFlag = false;
+static bool g_mpuOk = false;   // si el MPU no responde, no hay detección de caída
 void IRAM_ATTR onMpuInt() { g_fallFlag = true; }
 
 static void mpuWr(uint8_t r, uint8_t v) {
@@ -63,10 +67,17 @@ static void mpuWr(uint8_t r, uint8_t v) {
 }
 static uint8_t mpuRd(uint8_t r) {
   Wire.beginTransmission(MPU_I2C_ADDR); Wire.write(r); Wire.endTransmission(false);
-  Wire.requestFrom((int)MPU_I2C_ADDR, 1); return Wire.read();
+  if (Wire.requestFrom((int)MPU_I2C_ADDR, 1) != 1) return 0;   // sin respuesta -> 0, no 0xFF
+  return Wire.read();
 }
 static void mpuInit() {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  // WHO_AM_I del MPU-6050 = 0x68. Sin sensor, el pin INT queda flotando y dispara
+  // "caídas" falsas, así que directamente no se habilita la interrupción.
+  uint8_t who = mpuRd(REG_WHO_AM_I);
+  g_mpuOk = (who == 0x68);
+  Serial.printf("MPU-6050... %s (WHO_AM_I=0x%02X)\n", g_mpuOk ? "OK" : "NO DETECTADO, caidas desactivadas", who);
+  if (!g_mpuOk) return;
   mpuWr(REG_PWR_MGMT_1, 0x00); delay(100);
   mpuWr(REG_ACCEL_CONFIG, 0x00);       // ±2g
   mpuWr(REG_FF_THR, 0x20);             // umbral free-fall (AJUSTAR en campo)
@@ -237,6 +248,23 @@ static int readBatteryPercent() {
   return (int)constrain(pct, 0.0f, 100.0f);
 }
 
+// ---------------- Push a la familia (vía la app en Vercel) ----------------
+static void notifyFamily(const String& alertId) {
+  WiFiClientSecure tls;
+  tls.setInsecure();                        // igual que FirebaseRest (sin CA pinning)
+  HTTPClient http;
+  http.setTimeout(8000);
+  if (!http.begin(tls, "https://" NOTIFY_HOST "/api/notify")) {
+    Serial.println("Notify: no pude conectar");
+    return;
+  }
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + fb.idToken());
+  int code = http.POST("{\"alertId\":\"" + alertId + "\"}");
+  Serial.printf("Notify: HTTP %d %s\n", code, code > 0 ? http.getString().c_str() : "");
+  http.end();
+}
+
 // ---------------- EMERGENCIA ----------------
 static void triggerEmergency(const char* reason) {
   Serial.printf("\n*** EMERGENCIA (%s) ***\n", reason);
@@ -259,6 +287,9 @@ static void triggerEmergency(const char* reason) {
 
   // 2) Avisar al ESP32-CAM que capture foto + audio para este alertId
   CamLink.printf("ALERT|%s\n", alertId.c_str());
+
+  // 3) Push a la familia (llega aunque tengan la app cerrada)
+  if (ok) notifyFamily(alertId);
 
   beep(400);                                // confirmación "alerta enviada"
 }
@@ -329,7 +360,7 @@ void loop() {
   if (buttonPressedEdge()) triggerEmergency("boton");
 
   // --- Caída (INT de hardware) ---
-  if (g_fallFlag) {
+  if (g_mpuOk && g_fallFlag) {
     g_fallFlag = false;
     if (mpuRd(REG_INT_STATUS) & 0x80) triggerEmergency("caida");
   }

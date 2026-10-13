@@ -16,7 +16,9 @@
 #include <driver/i2s.h>
 #include "config.h"
 
-#define AUDIO_I2S_PORT   I2S_NUM_0
+// I2S_NUM_1: el driver de la cámara ya usa I2S0 en el ESP32. Si el audio usa el 0,
+// i2s_driver_install falla y deja la cámara rota ("Captura de foto fallo").
+#define AUDIO_I2S_PORT   I2S_NUM_1
 
 // Escribe la cabecera WAV (44 bytes). dataLen = bytes de PCM.
 static void writeWavHeader(File& f, uint32_t dataLen) {

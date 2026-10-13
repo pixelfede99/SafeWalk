@@ -25,6 +25,10 @@
 #include "camera_pins_aithinker.h"
 #include "audio_record.h"
 #include "FirebaseRest.h"
+#include "mbedtls/base64.h"
+
+// JPEG máximo que mandamos inline (base64 = +33%, y el doc de Firestore tiene 1 MiB)
+#define PHOTO_MAX_JPEG_BYTES  (600 * 1024)
 
 FirebaseRest fb;
 
@@ -54,13 +58,29 @@ static void handleAlert(const String& alertId) {
   String photoUrl = "", audioUrl = "";
 
   // ---- 1) FOTO ----
+  // Plan gratis (Spark) de Firebase: sin Storage. La foto va como data URL base64
+  // dentro del propio doc de la alerta (photoUrl). La app la muestra igual con <img>.
+  // Límite de Firestore: 1 MiB por doc -> descartamos JPEG muy grandes.
   camera_fb_t* fbuf = esp_camera_fb_get();
   if (fbuf) {
-    String objPath = String(ST_ALERT_PREFIX) + alertId + ".jpg";
-    if (fb.storageUploadBytes(objPath, "image/jpeg", fbuf->buf, fbuf->len, photoUrl))
-      Serial.printf("[CAM] Foto subida (%u bytes)\n", (unsigned)fbuf->len);
-    else
-      Serial.println("[CAM] Foto: fallo al subir");
+    if (fbuf->len <= PHOTO_MAX_JPEG_BYTES) {
+      size_t b64Len = 0;
+      mbedtls_base64_encode(nullptr, 0, &b64Len, fbuf->buf, fbuf->len);
+      unsigned char* b64 = (unsigned char*)ps_malloc(b64Len + 1);
+      if (b64 && mbedtls_base64_encode(b64, b64Len + 1, &b64Len, fbuf->buf, fbuf->len) == 0) {
+        b64[b64Len] = '\0';
+        photoUrl.reserve(b64Len + 32);
+        photoUrl = "data:image/jpeg;base64,";
+        photoUrl += (const char*)b64;
+        Serial.printf("[CAM] Foto lista (%u bytes JPEG, %u base64)\n",
+                      (unsigned)fbuf->len, (unsigned)b64Len);
+      } else {
+        Serial.println("[CAM] Foto: sin memoria para base64");
+      }
+      free(b64);
+    } else {
+      Serial.printf("[CAM] Foto muy grande (%u bytes), no entra en Firestore\n", (unsigned)fbuf->len);
+    }
     esp_camera_fb_return(fbuf);   // liberar YA el buffer (RAM)
   } else {
     Serial.println("[CAM] Captura de foto fallo");

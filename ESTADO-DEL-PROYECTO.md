@@ -22,7 +22,8 @@
 | Ítem | Estado |
 |---|---|
 | Firmware DevKit (`firmware/src/devkit/devkit_main.cpp`) | ✅ Completo y **compila** |
-| Firmware ESP32-CAM (`firmware/src/esp32cam/esp32cam_main.cpp`) | ✅ Completo (falta poder flashearlo) |
+| Firmware ESP32-CAM (`firmware/src/esp32cam/esp32cam_main.cpp`) | ✅ Completo |
+| **ESP32-CAM flasheada (adaptador CP2102, COM4)** | ✅ Hecho 2026-10-06: `Camara OK / WiFi OK / NTP OK / Login OK` (SD FALLO porque no tenía tarjeta) |
 | Librería `FirebaseRest` | ✅ Completa (con fix de include para que compile) |
 | Dashboard web | ✅ Completo |
 | "Encontrar el bastón" (web + firmware) | ✅ Código completo, **falta probarlo en el bastón** |
@@ -121,8 +122,26 @@ pero eso es bastante más firmware.
      motor a otro pin (ej. GPIO14, libre) en `config.h` (`PIN_MOTOR`).
 
 ### Otros pendientes de hardware
-- **ESP32-CAM:** ✅ **destrabado** — ya hay un adaptador USB-serie. Falta hacerlo:
-  el cableado y la secuencia están en `firmware/FLASHEO.md`.
+- **ESP32-CAM:** ✅ flasheada con adaptador **CP2102** (driver Silicon Labs CP210x, sale
+  como **COM4**). Cableado y secuencia en `firmware/FLASHEO.md`. El adaptador **no resetea
+  solo**: puente IO0→GND + RST para flashear, después sacar el puente y RST. Si
+  `pio ... -t upload` falla, flashear directo con esptool a 115200 (bootloader 0x1000,
+  partitions 0x8000, boot_app0 0xe000, firmware 0x10000). Serial de la CAM a **9600**.
+  Al conectar WiFi a veces da `Brownout detector was triggered` y reinicia (alimentación
+  floja): 5V cortos y directos, idealmente un capacitor 100–1000 µF en 5V/GND.
+  **Pendiente CAM:** probar con SD (FAT32) + mic → audio (sin Storage hay que ver dónde subirlo).
+- **Prueba de alerta DevKit→CAM:** el enlace GPIO13→U0R **anda**. Arreglado (2026-10-09/13):
+  1. Sin MPU-6050 el DevKit disparaba `EMERGENCIA (caida)` cada ~2.5 s → ahora chequea
+     WHO_AM_I al arrancar y si no responde desactiva las caídas.
+  2. `Captura de foto fallo`: el audio usaba **I2S_NUM_0**, que es el de la cámara → pasó a I2S_NUM_1.
+  3. Sin plan Blaze no hay Storage → la foto va como **data URL base64** en `photoUrl`.
+  4. `FirebaseRest::httpJson` mandaba todo con un `print()`; sobre TLS se truncaba a ~16 KB
+     y Firestore daba timeout con la foto → ahora escribe en bloques.
+  - DevKit ahora aparece en **COM5** (antes COM3).
+- **Push con la app cerrada (gratis, sin Cloud Functions):** ruta `src/app/api/notify` en
+  Vercel (firebase-admin + FCM). La llama el DevKit al crear la alerta y la PWA en el SOS.
+  Vercel necesita `FIREBASE_SERVICE_ACCOUNT` (secret, JSON de cuenta de servicio) y
+  `NEXT_PUBLIC_FIREBASE_VAPID_KEY` — **ya cargadas**. Tokens en `users/{uid}.fcmTokens`.
 - **Micrófono INMP441:** va en el **ESP32-CAM** (no en el DevKit): VDD→3.3V, GND, L/R→GND,
   WS→GPIO4, SCK→GPIO12, SD→GPIO13.
 - **Alimentación:** comprar un **TP4056 CON protección** (DW01+FS8205, con pads OUT+/OUT−

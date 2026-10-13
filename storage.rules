@@ -2,12 +2,11 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Fotos y audios de las alertas: solo lectura para usuarios autenticados.
-    // El ESP32 sube los archivos con su propia credencial (token de servicio),
-    // por lo que no necesitamos permisos de escritura desde el cliente.
+    // Fotos y audios de las alertas. La ESP32-CAM sube con el idToken de un usuario
+    // normal de Firebase Auth (email/password en secrets.h), así que la escritura
+    // tiene que permitirse a usuarios autenticados (con `write: if false` da 403).
     match /alerts/{deviceId}/{file=**} {
-      allow read: if request.auth != null;
-      allow write: if false;
+      allow read, write: if request.auth != null;
     }
   }
 }

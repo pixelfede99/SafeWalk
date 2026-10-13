@@ -17,7 +17,7 @@ import {
   Timestamp,
   type Unsubscribe
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { auth, db } from "./firebase";
 import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint, CommandDoc } from "@/types";
 
 // Genera un código de invitación de 6 chars (sin caracteres ambiguos)
@@ -163,7 +163,7 @@ export async function createSosAlert(
   location: { lat: number; lng: number },
   locationSource: "device" | "phone" | "unknown" = "device"
 ): Promise<void> {
-  await addDoc(collection(db, "alerts"), {
+  const ref = await addDoc(collection(db, "alerts"), {
     deviceId,
     timestamp: serverTimestamp(),
     location,
@@ -173,6 +173,20 @@ export async function createSosAlert(
     source: "pwa_sos", // diferenciador del SOS físico del ESP32
     locationSource
   });
+  // Push a la familia (llega aunque tengan la app cerrada). Si falla, la alerta
+  // igual quedó creada y se ve en la app.
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    if (idToken) {
+      await fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ alertId: ref.id })
+      });
+    }
+  } catch (err) {
+    console.warn("[notify] no se pudo avisar:", err);
+  }
 }
 
 // ----------------- COMMANDS (órdenes de la app al bastón) -----------------

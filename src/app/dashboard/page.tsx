@@ -11,6 +11,7 @@ import { DevicePanel } from "@/components/DevicePanel";
 import { AlertBanner } from "@/components/AlertBanner";
 import { markAlertSeen } from "@/lib/firestore";
 import { requestNotificationPermission, showLocalNotification } from "@/lib/notifications";
+import { registerPush } from "@/lib/push";
 import { seedDemoAlert } from "@/lib/demo";
 
 const Map = dynamic(() => import("@/components/Map"), { ssr: false });
@@ -29,10 +30,14 @@ function DashboardContent() {
   const { device, trail, paused } = useDevice(deviceId);
   const { alert, hasNew, dismissNew } = useLatestAlert(deviceId);
 
-  // Pedimos permiso de notificaciones la primera vez
+  // Pedimos permiso de notificaciones y registramos el push (FCM) para que las
+  // alertas lleguen también con la app cerrada.
   useEffect(() => {
-    requestNotificationPermission();
-  }, []);
+    if (!user) return;
+    requestNotificationPermission().then((perm) => {
+      if (perm === "granted") registerPush(user.uid);
+    });
+  }, [user]);
 
   // Cuando llega una alerta nueva, mostramos notificaci&#243;n del SO
   useEffect(() => {

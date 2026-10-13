@@ -130,7 +130,16 @@ bool FirebaseRest::httpJson(const char* host, const String& path, const char* me
   req += "Content-Length: " + String(body.length()) + "\r\n";
   req += "Connection: close\r\n\r\n";
   req += body;
-  client.print(req);
+  // En bloques y verificando lo escrito: sobre TLS un solo print() manda como mucho
+  // ~16 KB (un registro TLS) y descarta el resto en silencio. Con la foto en base64
+  // el body supera eso y Firestore se quedaba esperando -> timeout (código 0).
+  const uint8_t* p = (const uint8_t*)req.c_str();
+  size_t len = req.length(), sent = 0;
+  while (sent < len) {
+    size_t w = client.write(p + sent, min((size_t)1024, len - sent));
+    if (w == 0) { outCode = -2; client.stop(); return false; }
+    sent += w;
+  }
 
   bool ok = readHttpResponse(client, outCode, outResponse);
   client.stop();
