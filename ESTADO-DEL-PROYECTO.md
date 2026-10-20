@@ -21,7 +21,7 @@
 ## 📍 Dónde quedamos (sesión 4, 2026-10-20)
 
 ### 🆕 Lo último (Claude trabajando solo, ~20:00–20:30)
-- **WiFi cambiado al de casa** ("Familia Acosta", 2.4 GHz) en `secrets.h`, que no está en git.
+- **WiFi cambiado al de casa** (2.4 GHz) en `secrets.h`, que no está en git.
   **Las dos placas ya no dependen del hotspot del celular.** El DevKit conecta y loguea bien.
 - **DevKit flasheado** con el firmware principal + **comando de prueba por USB:** escribir
   `SOS` en el monitor serie (115200) dispara la emergencia igual que el botón GPIO33.
