@@ -84,6 +84,11 @@ static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& out
 // ----------------------------------------------------------------------------
 bool FirebaseRest::beginWiFi(const char* ssid, const char* pass, uint32_t timeoutMs) {
   WiFi.mode(WIFI_STA);
+#ifdef WIFI_TX_POWER
+  // Menos potencia de TX = picos de corriente más chicos al conectar. En el
+  // ESP32-CAM esos picos disparaban el brownout y la placa se reiniciaba.
+  WiFi.setTxPower(WIFI_TX_POWER);
+#endif
   WiFi.begin(ssid, pass);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) {

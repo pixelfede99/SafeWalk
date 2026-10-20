@@ -119,10 +119,13 @@ void setup() {
   Serial.begin(CAM_LINK_BAUD);   // U0RXD recibe el alertId del DevKit a esta velocidad
   Serial.println("\n=== SafeWalk ESP32-CAM ===");
 
+  // WiFi ANTES que la cámara: el pico de corriente al conectar el WiFi, sumado a
+  // la cámara ya capturando, disparaba el brownout y la placa se reiniciaba.
+  Serial.print("WiFi... ");  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO");
+
   Serial.printf("Camara... %s\n", initCamera() ? "OK" : "FALLO");
   Serial.printf("SD(1-bit)... %s\n", SD_MMC.begin("/sdcard", true) ? "OK" : "FALLO");
 
-  Serial.print("WiFi... ");  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO");
   Serial.print("NTP...  ");  Serial.println(fb.syncTime() ? "OK" : "FALLO");
   Serial.print("Login.. ");  Serial.println(fb.signIn(FB_DEVICE_EMAIL, FB_DEVICE_PASSWORD) ? "OK" : "FALLO");
 

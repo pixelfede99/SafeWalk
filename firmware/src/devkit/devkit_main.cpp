@@ -335,6 +335,14 @@ void setup() {
 }
 
 void loop() {
+  // --- Prueba por USB: escribir "SOS" en el monitor serie dispara la emergencia
+  //     igual que el botón (para probar foto + push sin tocar GPIO33) ---
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.equalsIgnoreCase("SOS")) triggerEmergency("prueba-serial");
+  }
+
   // --- GPS: consumir continuamente ---
   while (GPSserial.available()) gps.encode(GPSserial.read());
   if (gps.location.isValid()) {

@@ -179,6 +179,13 @@ Con el DevKit ya flasheado y online:
 | El CAM no bootea | Algo colgado de GPIO12, o el puente de GPIO0 quedó puesto |
 | `DNS Failed` con WiFi conectado | Red con portal cautivo → usar hotspot por datos móviles |
 | La primera compilación tarda muchísimo | Está bajando el toolchain (cientos de MB). Pasa una sola vez |
+| La CAM queda muda después de `esptool ... run` | **No usar `run` en la CAM.** Salta al programa sin el bootloader de 2ª etapa y se cuelga; solo sale con RST. Para que arranque el programa nuevo: sacar el puente IO0 y apretar RST |
+| Después de flashear la CAM, no recibe las `ALERT` del DevKit | Quedó el TX del adaptador en U0R. Para la prueba: TX del adaptador **afuera**, GPIO13 del DevKit → U0R |
+
+> Truco para dejar la CAM flasheada sin estar presente: con la placa ya en modo
+> flasheo (IO0→GND + RST), **sacá el puente sin apretar RST**. El modo de arranque
+> se lee solo al resetear, así que se puede flashear igual. El próximo RST (o un
+> corte de luz) ya arranca el programa normal.
 
 ---
 

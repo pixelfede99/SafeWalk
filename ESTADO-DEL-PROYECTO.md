@@ -20,6 +20,27 @@
 
 ## 📍 Dónde quedamos (sesión 4, 2026-10-20)
 
+### 🆕 Lo último (Claude trabajando solo, ~20:00–20:30)
+- **WiFi cambiado al de casa** ("Familia Acosta", 2.4 GHz) en `secrets.h`, que no está en git.
+  **Las dos placas ya no dependen del hotspot del celular.** El DevKit conecta y loguea bien.
+- **DevKit flasheado** con el firmware principal + **comando de prueba por USB:** escribir
+  `SOS` en el monitor serie (115200) dispara la emergencia igual que el botón GPIO33.
+  - Probado: `Alerta creada: SAFEWALK-DEVICE-001_2026-10-20T23-07-37Z (OK)`. **La regla
+    de `alerts/` está publicada y la alerta se escribe.** (Queda esa alerta de prueba en el
+    dashboard, sin foto.)
+  - `Notify: HTTP 500 {"error":"servidor sin configurar"}`: confirma el bloqueante 2.
+- **CAM flasheada** con potencia de WiFi reducida (`-DWIFI_TX_POWER=WIFI_POWER_8_5dBm`
+  en `platformio.ini`, aplicada en `FirebaseRest::beginWiFi`), para achicar el pico del
+  brownout. **Pero quedó colgada:** usé `esptool run` para arrancarla sin RST, y eso la
+  dejó muda (ver FLASHEO.md). **Hay que apretar RST** (sin el puente IO0).
+- **Preparado, compila pero NO está flasheado:** en la CAM, **WiFi antes que la cámara**
+  (`esp32cam_main.cpp`), así el pico del WiFi no se suma a la cámara ya capturando. Para
+  subirlo: IO0→GND + RST, TX del adaptador→U0R, flashear, sacar el puente, RST.
+- **GPIO35 midió ~340 mV:** el divisor del boost no está armado (pin al aire), así que
+  esa medición no sirve. La salida del boost sigue sin medirse.
+- **Cómo quedaron los cables:** TX del adaptador → U0R de la CAM (como para flashear),
+  GPIO13 del DevKit **desconectado**. Para la prueba de la alerta hay que volver a cambiarlos.
+
 ### Lo que se hizo
 - **Las dos placas están flasheadas con `bab7be2`** (hash verificado por esptool):
   - **CAM** por el CP2102 en **COM4**, con esptool directo a 115200 (IO0→GND + RST).
@@ -76,7 +97,8 @@
    DevKit GPIO13→U0R, GND común. RST.
 2. En la app del celular, aceptá las notificaciones (para que guarde el token) y
    **cerrala del todo**.
-3. Esperá `[CAM] Listo. Esperando ALERT del DevKit...` y tocá **GPIO33 a GND**.
+3. Esperá `[CAM] Listo. Esperando ALERT del DevKit...` y tocá **GPIO33 a GND**,
+   o escribí `SOS` en el monitor serie del DevKit.
 4. Lo esperado: DevKit `*** EMERGENCIA (boton) ***` → `Alerta creada ... (OK)` →
    `Notify: HTTP 200 {"sent":1...}`. CAM `Foto lista` → `Alerta ... actualizada (OK)`.
    La foto aparece en la alerta y la notificación llega con la app cerrada.
