@@ -164,9 +164,19 @@ export async function leaveDevice(
   isOwner: boolean,
   remainingIds: string[]
 ): Promise<string | null> {
+  const ref = doc(db, "devices", deviceId);
   if (!isOwner) {
-    await updateDoc(doc(db, "devices", deviceId), {
-      caregiverUids: arrayRemove(uid)
+    await updateDoc(ref, { caregiverUids: arrayRemove(uid) });
+  } else {
+    // El dueño se va: el bastón pasa al primer cuidador, o queda sin dueño si no
+    // hay ninguno. Antes no se tocaba el doc, y el ex dueño seguía recibiendo las
+    // push de un bastón que había eliminado.
+    const snap = await getDoc(ref);
+    const caregivers = (snap.data()?.caregiverUids as string[] | undefined) ?? [];
+    const nextOwner = caregivers.find((c) => c !== uid) ?? null;
+    await updateDoc(ref, {
+      ownerUid: nextOwner,
+      caregiverUids: arrayRemove(uid, ...(nextOwner ? [nextOwner] : []))
     });
   }
   // Si tenía otros círculos, seteamos el primero como activo. Sino null.

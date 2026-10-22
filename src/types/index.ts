@@ -20,7 +20,8 @@ export interface GeoPoint {
 export interface DeviceDoc {
   deviceId: string;
   name: string;
-  ownerUid: string;
+  /** null = sin dueño (el dueño lo eliminó y no había cuidadores). */
+  ownerUid: string | null;
   caregiverUids: string[];
   batteryLevel: number;
   isOnline: boolean;
