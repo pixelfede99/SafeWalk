@@ -89,6 +89,9 @@ prueba completa (al final de esta sección).
   Ahora manda 0,0 + `locationSource` (`device` / `device_last` / `unknown`) en la alerta y
   `gpsFix` en el heartbeat. El historial solo guarda puntos con fix actual.
 - **La alerta guarda qué la disparó:** `trigger` = `boton` / `caida` / `prueba`.
+- **Batería "sin medir" en vez de 0 %:** sin el divisor de GPIO35 el bastón decía 0 %
+  (la familia lo leía como "se está apagando"). Ahora manda `batteryLevel = -1` y la
+  web dice "sin medir". **Hasta mergear el PR, la web publicada muestra "-1%".**
 - **Bug: re-login.** Si fallaba el refresco del token (ej. corte de WiFi justo en ese
   momento) no había plan B: a la hora el bastón dejaba de escribir en Firebase hasta
   reiniciarlo, sin avisar. Ahora vuelve a loguearse solo. **Verificado en la placa:** a
