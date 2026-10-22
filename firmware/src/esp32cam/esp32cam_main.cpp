@@ -134,7 +134,7 @@ static void handleAlert(const String& alertId) {
   photoUrl = String();   // liberar antes de grabar
 
   // ---- 2) AUDIO (a PSRAM, sin SD) ----
-  if (audioI2SBegin(AUDIO_FS_SAMPLE_RATE)) {
+  if (audioI2SBeginAuto(AUDIO_FS_SAMPLE_RATE)) {
     size_t wavLen = 0;
     uint8_t* wav = recordWavToPsram(AUDIO_FS_SAMPLE_RATE, AUDIO_FS_SECONDS, wavLen);
     audioI2SEnd();

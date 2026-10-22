@@ -37,12 +37,13 @@ static void writeWavHeader(File& f, uint32_t dataLen) {
 }
 
 // Inicializa el I2S para el INMP441 (RX, master, mono izquierdo).
-static bool audioI2SBegin(uint32_t sampleRate = AUDIO_SAMPLE_RATE) {
+static bool audioI2SBegin(uint32_t sampleRate = AUDIO_SAMPLE_RATE,
+                          i2s_channel_fmt_t channel = I2S_CHANNEL_FMT_ONLY_LEFT) {
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate = sampleRate;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;     // el INMP441 entrega 24/32 bits
-  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;       // L/R a GND -> canal izquierdo
+  cfg.channel_format = channel;                         // L/R a GND -> canal izquierdo
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count = 6;
@@ -62,6 +63,45 @@ static bool audioI2SBegin(uint32_t sampleRate = AUDIO_SAMPLE_RATE) {
 }
 
 static void audioI2SEnd() { i2s_driver_uninstall(AUDIO_I2S_PORT); }
+
+// Pico (en 24 bits, sin continua) de ~0,25 s de audio. Sirve para saber si por
+// el canal configurado llega señal.
+static int32_t audioProbePeak(uint32_t sampleRate) {
+  int32_t buf[256];
+  size_t got = 0;
+  int32_t mn = INT32_MAX, mx = INT32_MIN;
+  uint32_t n = 0, want = sampleRate / 4;
+  for (int i = 0; i < 4; i++)   // descartar el arranque del micrófono
+    i2s_read(AUDIO_I2S_PORT, buf, sizeof(buf), &got, pdMS_TO_TICKS(100));
+  while (n < want) {
+    if (i2s_read(AUDIO_I2S_PORT, buf, sizeof(buf), &got, pdMS_TO_TICKS(500)) != ESP_OK || !got)
+      return 0;
+    for (size_t i = 0; i < got / 4 && n < want; i++, n++) {
+      const int32_t v = buf[i] >> 8;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+  }
+  return (mx - mn) / 2;
+}
+
+// Arranca el I2S en el canal donde de verdad llega el micrófono. Con L/R del
+// INMP441 a GND el dato va en el canal izquierdo, pero el driver I2S del ESP32
+// (IDF 4.x) en algunas versiones tiene izquierdo/derecho invertidos: sin esto,
+// se grabaría el canal vacío y la CAM diría "sin micrófono" con el micrófono bien
+// conectado. Prueba 0,25 s con cada uno. Devuelve false si el I2S no arranca.
+static bool audioI2SBeginAuto(uint32_t sampleRate) {
+  if (!audioI2SBegin(sampleRate, I2S_CHANNEL_FMT_ONLY_LEFT)) return false;
+  if (audioProbePeak(sampleRate) >= 64) return true;
+  audioI2SEnd();
+  if (!audioI2SBegin(sampleRate, I2S_CHANNEL_FMT_ONLY_RIGHT)) return false;
+  if (audioProbePeak(sampleRate) >= 64) {
+    Serial.println("[AUDIO] el micrófono llega por el canal DERECHO (driver con L/R invertidos)");
+    return true;
+  }
+  // Ninguno trae señal: se deja el derecho armado y recordWavToPsram dirá "señal plana".
+  return true;
+}
 
 // Graba 'seconds' a 'path' (ej. "/alert.wav"). Devuelve los bytes de PCM escritos.
 // Asume que SD_MMC ya está montado y el I2S ya inicializado.
@@ -168,7 +208,7 @@ static uint8_t* recordWavToPsram(uint32_t sampleRate, int seconds, size_t& outLe
   if (peak < 64) {
     // Señal plana: no hay micrófono conectado (o está roto). Subir 6 s de
     // silencio solo engordaría el doc de la alerta.
-    Serial.println("[AUDIO] señal plana: sin microfono, no se sube audio");
+    Serial.println("[AUDIO] señal plana: sin microfono (o mal conectado), no se sube audio");
     free(wav);
     return nullptr;
   }
