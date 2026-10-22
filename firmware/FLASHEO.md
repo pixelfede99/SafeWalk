@@ -120,6 +120,21 @@ pio run -e esp32cam -t monitor     # OJO: este env monitorea a 9600 baud
 El paso 3 no es opcional: con GPIO0 a masa la placa arranca siempre en modo
 flasheo y no corre tu programa.
 
+### Flashear la CAM con esptool
+
+Con el CP2102 (que no resetea solo), `pio ... -t upload` suele fallar. Lo que anda
+siempre es compilar con PlatformIO y flashear con esptool a 115200:
+
+```bash
+cd firmware
+pio run -e esp32cam
+cd .pio/build/esp32cam
+python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32 --port COM4 --baud 115200 --before no_reset --after no_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size detect 0x1000 bootloader.bin 0x8000 partitions.bin 0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin 0x10000 firmware.bin
+```
+
+(`python` = el de PlatformIO: `~/.platformio/penv/Scripts/python.exe` en Windows.)
+Antes: IO0→GND + RST, TX del adaptador → U0R. Después: sacar el puente + RST.
+
 ### Probá primero la cámara sola
 
 Antes del firmware completo, conviene verificar que el cableado y la cámara

@@ -2,8 +2,8 @@
 
 > **Para retomar en cualquier PC (o en una charla nueva con Claude):** leé este
 > archivo primero. Resume dónde quedó todo, qué falta y cómo seguir.
-> Última actualización: 2026-10-20 (sesión 4: placas flasheadas con `bab7be2`,
-> alimentación de la CAM y diagnóstico de la push). **Empezá por "Dónde quedamos".**
+> Última actualización: 2026-10-22 (sesión 5: Claude trabajando solo mientras
+> Agustín estaba en el colegio). **Empezá por "Dónde quedamos".**
 
 ---
 
@@ -15,93 +15,133 @@
 - **El código está completo.** Lo que falta es **configuración y armado de hardware**,
   no programación.
 - Repo: https://github.com/pixelfede99/SafeWalk (rama `main`).
+- Firebase en plan **gratis (Spark)**: sin Storage ni Cloud Functions. Foto y audio de
+  las alertas van como base64 dentro del doc; la push la manda `/api/notify` en Vercel.
 
 ---
 
-## 📍 Dónde quedamos (sesión 4, 2026-10-20)
+## 📍 Dónde quedamos (sesión 5, 2026-10-22)
 
-### 🆕 Lo último (Claude trabajando solo, ~20:00–20:30)
-- **WiFi cambiado al de casa** (2.4 GHz) en `secrets.h`, que no está en git.
-  **Las dos placas ya no dependen del hotspot del celular.** El DevKit conecta y loguea bien.
-- **DevKit flasheado** con el firmware principal + **comando de prueba por USB:** escribir
-  `SOS` en el monitor serie (115200) dispara la emergencia igual que el botón GPIO33.
-  - Probado: `Alerta creada: SAFEWALK-DEVICE-001_2026-10-20T23-07-37Z (OK)`. **La regla
-    de `alerts/` está publicada y la alerta se escribe.** (Queda esa alerta de prueba en el
-    dashboard, sin foto.)
-  - `Notify: HTTP 500 {"error":"servidor sin configurar"}`: confirma el bloqueante 2.
-- **CAM flasheada** con potencia de WiFi reducida (`-DWIFI_TX_POWER=WIFI_POWER_8_5dBm`
-  en `platformio.ini`, aplicada en `FirebaseRest::beginWiFi`), para achicar el pico del
-  brownout. **Pero quedó colgada:** usé `esptool run` para arrancarla sin RST, y eso la
-  dejó muda (ver FLASHEO.md). **Hay que apretar RST** (sin el puente IO0).
-- **Preparado, compila pero NO está flasheado:** en la CAM, **WiFi antes que la cámara**
-  (`esp32cam_main.cpp`), así el pico del WiFi no se suma a la cámara ya capturando. Para
-  subirlo: IO0→GND + RST, TX del adaptador→U0R, flashear, sacar el puente, RST.
-- **GPIO35 midió ~340 mV:** el divisor del boost no está armado (pin al aire), así que
-  esa medición no sirve. La salida del boost sigue sin medirse.
-- **Cómo quedaron los cables:** TX del adaptador → U0R de la CAM (como para flashear),
-  GPIO13 del DevKit **desconectado**. Para la prueba de la alerta hay que volver a cambiarlos.
+### ✋ Lo que tenés que hacer vos (en este orden)
 
-### Lo que se hizo
-- **Las dos placas están flasheadas con `bab7be2`** (hash verificado por esptool):
-  - **CAM** por el CP2102 en **COM4**, con esptool directo a 115200 (IO0→GND + RST).
-  - **DevKit**: hoy apareció en **COM3**, no en COM5. **El COM cambia: listá los
-    puertos antes de flashear.** Su binario ya estaba al día (los fuentes no cambiaron
-    desde el 13/10, así que PlatformIO no recompiló). Tiene `/api/notify` y el chequeo del MPU.
-- Se armó el cableado de prueba DevKit GPIO13 → U0R de la CAM, con GND común.
+Los pasos 1 a 3 son **sin hardware** y se pueden hacer desde el celular.
 
-### ❌ Bloqueante 1: la CAM se reinicia por brownout al prender el WiFi
-- Con el 5V del CP2102 hubo **346 brownouts en 15 min**: nunca pasó de `WiFi...`.
-- Se pasó a la alimentación definitiva: **18650 → TP4056 (6 pines, con protección) →
-  boost MT3608 → 5V de la CAM**. **Siguió reiniciando** (brownout + basura en el serial).
-  El tester se rompió, así que **no se midió** ni la carga de la batería ni la salida del boost.
-- **Próximo paso:** con un tester que ande, **antes que nada**:
-  1. Medí la batería: tiene que dar entre 3.7 y 4.2V. Si da menos, cargala por el
-     micro USB del TP4056.
-  2. Medí la salida del boost **sin carga**: tiene que dar **5.0V**. Ajustá el trimpot
-     girando mientras medís; el sentido depende del módulo.
-  3. Si con 5V reales igual hay brownout: poné un capacitor de 100–1000 µF en 5V/GND,
-     pegado a la CAM, y usá cables cortos y gruesos.
-- Conexiones definitivas: Bat+→B+, Bat−→B−, OUT+→VIN+ del boost, OUT−→VIN− del boost,
-  VOUT+→5V de la CAM, VOUT−→GND común. **La carga nunca sale de B+/B−.** No conectes el
-  boost al VIN del DevKit mientras el DevKit esté enchufado a la PC por USB.
-- Medición de batería (GPIO35): divisor 100k/100k desde **OUT+ del TP4056**.
+**1. Cargar `FIREBASE_SERVICE_ACCOUNT` en Vercel (sin esto NO llega ninguna push).**
+Verificado el 22/10: la variable **no existe** en el proyecto `safe-walk`, ni en
+Production ni en Preview (los dos deploys dicen `Falta la variable FIREBASE_SERVICE_ACCOUNT`).
+1. Firebase Console → ⚙️ Configuración del proyecto → **Cuentas de servicio** →
+   **Generar nueva clave privada** → baja un `.json`. Es gratis.
+2. Vercel → proyecto **safe-walk** (ojo que sea ese) → Settings → **Environment Variables**
+   → Add New:
+   - Key: `FIREBASE_SERVICE_ACCOUNT` (exacto, sin espacios)
+   - Value: **todo** el contenido del `.json`, desde `{` hasta `}`
+   - Environments: tildá **Production** y **Preview**
+3. Guardá → Deployments → el de arriba → ⋯ → **Redeploy**.
+4. **Verificá** abriendo https://safe-walk-mauve.vercel.app/api/notify (cuando esté mergeado
+   el PR del punto 3): tiene que decir `{"configured":true}`. Si dice
+   `configured:false`, el `reason` dice qué falta.
+5. Después, en la app → **Mi cuenta → Notificaciones → Probar notificación**: prueba
+   toda la cadena y dice en qué paso se corta.
 
-### ❌ Bloqueante 2: la push NO puede llegar, falta `FIREBASE_SERVICE_ACCOUNT` en producción
-- `POST /api/notify` responde `500 servidor sin configurar`. El log de Vercel dice
-  `Falta la variable FIREBASE_SERVICE_ACCOUNT` (deploy `dpl_BsHpb93c…` de `bab7be2`, del 13/10).
-- Lo más probable es que la variable se haya cargado ~1 min después de que arrancó ese
-  deploy. Cada deploy se queda con las variables que había al empezar.
-- **Arreglo:** Vercel → safe-walk → Settings → Environment Variables → verificá que
-  `FIREBASE_SERVICE_ACCOUNT` tenga **Production** tildado → Deployments → **Redeploy**.
-- **Cómo verificar** (sin token real):
-  `curl -X POST -H "Authorization: Bearer x" https://safe-walk-mauve.vercel.app/api/notify`.
-  Si da `401 token inválido`, quedó bien. Si sigue dando `500 servidor sin configurar`, todavía falta.
-- Verificado OK: la `NEXT_PUBLIC_FIREBASE_VAPID_KEY` **sí** está en el bundle publicado.
+> El `.json` es una llave del proyecto: **no lo subas a GitHub** ni lo mandes por chat.
 
-### ⚠️ Menor: reglas de `commands/` sin publicar (403 cada 5 s en el DevKit)
-- El DevKit **está logueado**: las escrituras del heartbeat a `devices/` no fallan.
-  Pero el GET a `commands/SAFEWALK-DEVICE-001` da 403, porque la regla está en
-  `firestore.rules` y nunca se publicó.
-- Rompe "encontrar el bastón", **no** el botón de emergencia.
-- **Arreglo gratis:** Firebase Console → Firestore → Reglas → pegá `firestore.rules` → Publicar.
+**2. Publicar las reglas de Firestore (gratis).** Firebase Console → Firestore Database
+→ **Reglas** → borrá todo, pegá el contenido de [`firestore.rules`](firestore.rules) →
+**Publicar**. Sin esto, "encontrar el bastón" no anda (el bastón recibe 403 al leer
+`commands/`; ahora reintenta cada 60 s y lo avisa por el serial).
 
-### Otros datos de la sesión
-- El DevKit tuvo un rato `DNS Failed for firestore.googleapis.com`: el hotspot estaba
-  conectado pero sin datos. Se recuperó solo.
-- Revisado y OK: el DevKit y `/api/notify` usan el mismo formato (`Bearer idToken` +
-  `{alertId}`). El service worker muestra los push solo-data. Foto SVGA q12 (~30–80 KB,
-  muy por debajo de 1 MiB). El dashboard la muestra con `<img>` y "Descargar foto" anda con data URL.
+**3. Revisar y mergear el pull request** de la rama `claude/nucleos-ubicacion-real`
+(lo de abajo). Al mergear, Vercel publica la web nueva sola.
 
-### La prueba que falta (cuando estén resueltos los bloqueantes 1 y 2)
-1. CAM: sacá el puente IO0, TX del adaptador desconectado de U0R, dejá RX→U0T + GND.
-   DevKit GPIO13→U0R, GND común. RST.
-2. En la app del celular, aceptá las notificaciones (para que guarde el token) y
-   **cerrala del todo**.
-3. Esperá `[CAM] Listo. Esperando ALERT del DevKit...` y tocá **GPIO33 a GND**,
-   o escribí `SOS` en el monitor serie del DevKit.
-4. Lo esperado: DevKit `*** EMERGENCIA (boton) ***` → `Alerta creada ... (OK)` →
-   `Notify: HTTP 200 {"sent":1...}`. CAM `Foto lista` → `Alerta ... actualizada (OK)`.
-   La foto aparece en la alerta y la notificación llega con la app cerrada.
+**4. Alimentación de la CAM (el bloqueante de hardware).** Ver
+[`firmware/ALIMENTACION-CAM.md`](firmware/ALIMENTACION-CAM.md): checklist en orden, qué
+medir, y cómo usar el firmware de diagnóstico `esp32cam_nobod`.
+
+**5. Flashear la CAM con el firmware nuevo** (audio sin SD, foto primero) y hacer la
+prueba completa (al final de esta sección).
+
+### 🤖 Lo que hice solo en la sesión 5 (todo en el PR, probado donde se pudo)
+
+**DevKit — probado en la placa real (COM3):**
+
+| | Antes | Ahora |
+|---|---|---|
+| Peor traba del loop (sin medir obstáculos) | **2465 ms** | **26–68 ms** |
+| Tiempo con el loop trabado | **25 %** (y ~45 % con las reglas publicadas) | **0 %** |
+
+- **Toda la red pasó a una tarea en el núcleo 0.** Antes cada request a Firebase
+  trababa el loop hasta 2,5 s: caminando son ~3,5 m **sin detectar obstáculos**. Ahora el
+  loop (sensores, motor, buzzer, botón) no se traba nunca, ni durante una emergencia.
+  31 minutos seguidos sin reinicios y con memoria estable.
+- **La emergencia avisa si se envió:** 1 pitido largo = enviada; **5 cortitos = falló,
+  volver a apretar** (la persona no puede mirar una pantalla). Mientras una alerta se
+  está mandando, otra presión se ignora (no 5 alertas iguales por apretar en el apuro).
+- **Ubicación honesta:** sin GPS el bastón mandaba **el Obelisco** como si fuera real.
+  Ahora manda 0,0 + `locationSource` (`device` / `device_last` / `unknown`) en la alerta y
+  `gpsFix` en el heartbeat. El historial solo guarda puntos con fix actual.
+- **La alerta guarda qué la disparó:** `trigger` = `boton` / `caida` / `prueba`.
+- **Bug: re-login.** Si fallaba el refresco del token (ej. corte de WiFi justo en ese
+  momento) no había plan B: a la hora el bastón dejaba de escribir en Firebase hasta
+  reiniciarlo, sin avisar. Ahora vuelve a loguearse solo.
+- **Bug: respuestas cortadas.** Si Firestore tardaba más de 1 s en contestar, la
+  respuesta entera (headers incluidos) terminaba como "cuerpo" con código 0. Ahora espera.
+- **Comandos por USB** (monitor serie 115200): `SOS` (emergencia de prueba), `STATUS`
+  (WiFi, Firebase, GPS, batería, trabas del loop, memoria), `RING` (pitido 5 s), `AYUDA`.
+
+**Web — compila, build de producción OK, revisada en el navegador con datos de prueba:**
+- El mapa ya **no dibuja el bastón en el Obelisco** cuando no hay ubicación: cartel
+  "sin señal GPS" y, si es la última posición conocida, marcador gris.
+- Alertas: título según qué la disparó (Botón / **Caída detectada** / Prueba / SOS de la
+  app) y de dónde salió la ubicación. Sin ubicación: recuadro en vez de mapa.
+- `/api/notify`: el texto de la push dice si fue caída o botón; `GET` de diagnóstico;
+  modo prueba `{test:true}`. En **Mi cuenta → Notificaciones**, botón para probar la push.
+- Descargas con la extensión real (.wav, no .mp3). Historial: 30 alertas, no 100 (cada
+  una pesa ~250 KB con foto y audio en base64).
+
+**CAM — compila, NO probada (la CAM sigue con brownout):**
+- **Audio sin SD y sin Storage:** se graba en la PSRAM (6 s a 8 kHz, ~128 KB en base64)
+  y va en `audioUrl` como la foto. Normaliza el volumen (la voz a un metro llega muy
+  baja). Sin micrófono no sube nada.
+- **La foto sale primero**, en su propio envío: la familia la ve en segundos. Antes
+  esperaba los 15 s de grabación del audio.
+- El `alertId` que llega por el cable se valida antes de usarlo.
+- Nuevo env **`esp32cam_nobod`** para diagnosticar el brownout (ver ALIMENTACION-CAM.md).
+
+### Estado de las placas al terminar la sesión 5
+- **DevKit:** con el firmware nuevo de la rama, andando en el WiFi de casa, en **COM3**.
+  GPS sin datos (1 char recibido: no está conectado), MPU no detectado, GPIO35 al aire.
+- **CAM:** tiene el firmware del 20/10 (WiFi antes que la cámara + potencia baja), **no**
+  el del audio nuevo. Sigue reiniciándose por brownout al prender el WiFi, también
+  alimentada desde el VIN del DevKit (3 fuentes distintas, mismo resultado).
+- **Alertas de prueba en el dashboard** (sin foto): `…2026-10-20T23-07-37Z` y
+  `…2026-10-22T10-38-45Z`. Se pueden borrar desde la consola de Firestore.
+
+### La prueba completa (cuando estén resueltos la alimentación y la variable de Vercel)
+1. Flashear la CAM: IO0→GND + RST, **TX del adaptador → U0R** y GPIO13 del DevKit
+   **afuera**. Compilá con `pio run -e esp32cam` y flasheá con esptool directo
+   (comando exacto en FLASHEO.md, "Flashear la CAM con esptool") → sacar el puente → RST.
+2. Modo prueba: TX del adaptador **afuera** de U0R (dejá RX→U0T + GND), **GPIO13 del
+   DevKit → U0R**, GND común. RST en la CAM.
+3. En el celular: Mi cuenta → Notificaciones → **Probar notificación** (deja el token
+   registrado). Después **cerrá la app del todo**.
+4. Esperá `[CAM] Listo. Esperando ALERT del DevKit...` y tocá **GPIO33 a GND**, o
+   escribí `SOS` en el monitor del DevKit.
+5. Lo esperado: DevKit `*** EMERGENCIA ***` → `Alerta creada ... (OK)` →
+   `Notify: HTTP 200 {"sent":1...}` → 1 pitido largo. CAM `Foto subida (OK)` →
+   `Audio subido (OK)` (o "señal plana" sin micrófono). La push llega con la app cerrada
+   y la foto aparece en la alerta.
+
+### Historial de la sesión 4 (20/10), resumido
+- Las dos placas se flashearon con `bab7be2`. El COM del DevKit **cambia** (COM5 el 13/10,
+  COM3 el 20/10): listá los puertos antes de flashear.
+- La CAM nunca pasó de `WiFi...`: brownout con el 5V del CP2102 (346 en 15 min), con
+  18650 → TP4056 → MT3608, y con el VIN del DevKit.
+- `esptool run` dejó la CAM colgada (ver FLASHEO.md: **no usarlo**).
+- `secrets.h` (no versionado) quedó con el **WiFi de casa** en vez del hotspot.
+- Conexiones definitivas de la batería: Bat+→B+, Bat−→B−, OUT+→VIN+ del boost,
+  OUT−→VIN− del boost, VOUT+→5V de la CAM, VOUT−→GND común. **La carga nunca sale de
+  B+/B−.** No conectes el boost al VIN del DevKit mientras el DevKit esté por USB.
+  Divisor de batería 100k/100k desde **OUT+ del TP4056** a GPIO35.
 
 ---
 
