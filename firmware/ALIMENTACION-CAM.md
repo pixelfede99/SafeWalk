@@ -86,6 +86,15 @@ En el serial (9600) aparece `!!! DIAGNOSTICO: detector de brownout APAGADO`. Des
   la tensión se derrumba de verdad: cables/protoboard, fuente, o el regulador
   de la CAM (medir el 3V3, punto 5).
 
+## Cuando la alimentación quede bien
+
+El firmware de la CAM arranca el WiFi con **potencia reducida** (8,5 dBm, un quinto
+de la normal) para achicar los picos: `-DWIFI_TX_POWER=WIFI_POWER_8_5dBm` en
+`[esp32cam_base]` de `platformio.ini`. Con una alimentación sana ya no hace falta,
+y lejos del router puede costar señal. Si la CAM conecta pero las fotos tardan o
+fallan, cambialo a `WIFI_POWER_15dBm` (o borrá la línea para la potencia normal) y
+volvé a flashear.
+
 ## Si nada de esto funciona
 
 Una ESP32-CAM AI-Thinker nueva cuesta poco y el firmware ya está listo. Antes de
