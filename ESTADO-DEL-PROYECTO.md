@@ -69,7 +69,7 @@ prueba completa (al final de esta sección).
 | | Antes | Ahora |
 |---|---|---|
 | Peor traba del loop (sin medir obstáculos) | **2465 ms** | **26–68 ms** |
-| Tiempo con el loop trabado | **25 %** (y ~45 % con las reglas publicadas) | **0 %** |
+| Tiempo con el loop trabado | **25 %** (~45 % con el poll de "sonar" cada 5 s) | **0 %** |
 
 - **Toda la red pasó a una tarea en el núcleo 0.** Antes cada request a Firebase
   trababa el loop hasta 2,5 s: caminando son ~3,5 m **sin detectar obstáculos**. Ahora el
@@ -131,9 +131,11 @@ prueba completa (al final de esta sección).
   una pesa ~250 KB con foto y audio en base64).
 - **Bug: la primera alerta de un bastón no mostraba el banner** ni la notificación
   local (solo contaba como nueva si ya había otra antes). Justo el caso de una demo.
-- Pantalla no vidente: si el bastón **no confirma** el "sonar" en 20 s, la voz lo dice
-  (antes venía silencio). Y el SOS sin ninguna ubicación ya no dice "se mandó la última
-  del bastón".
+- Pantalla no vidente: si el bastón **no confirma** el "sonar" en 25 s, la voz lo dice
+  (antes venía silencio); la cuenta regresiva arranca cuando el bastón empieza a sonar. Y
+  el SOS sin ninguna ubicación ya no dice "se mandó la última del bastón".
+- `/api/notify`: si FCM falla, la alerta no queda marcada como notificada, y el bastón
+  reintenta la push ante timeouts o errores 502/503/504 de Vercel.
 - **Bug: emparejar un bastón que ya tenía dueño le robaba las alertas al dueño.** Si otro
   familiar usaba "Vincular un bastón nuevo" en vez del código, pasaba a ser el dueño, se
   borraban los cuidadores y el dueño original dejaba de recibir las push sin enterarse.
@@ -171,8 +173,9 @@ prueba completa (al final de esta sección).
   el del audio nuevo. Sigue reiniciándose por brownout al prender el WiFi, también
   alimentada desde el VIN del DevKit (3 fuentes distintas, mismo resultado).
 - **Alertas de prueba en el dashboard** (sin foto, todas de `SAFEWALK-DEVICE-001`):
-  `…2026-10-20T23-07-37Z`, `…2026-10-22T10-38-45Z`, `…2026-10-22T11-41-25Z` y
-  `…2026-10-22T11-42-11Z` (hora UTC). Se pueden borrar desde la consola de Firestore.
+  `…2026-10-20T23-07-37Z`, `…2026-10-22T10-38-45Z`, `…2026-10-22T11-41-25Z`,
+  `…2026-10-22T11-42-11Z` y `…sinhora_aeb9` (hora UTC). Se pueden borrar desde la consola
+  de Firestore.
 
 ### La prueba completa (cuando estén resueltos la alimentación y la variable de Vercel)
 1. Flashear la CAM: IO0→GND + RST, **TX del adaptador → U0R** y GPIO13 del DevKit
@@ -184,7 +187,7 @@ prueba completa (al final de esta sección).
    registrado). Después **cerrá la app del todo**.
 4. Esperá `[CAM] Listo. Esperando ALERT del DevKit...` y tocá **GPIO33 a GND**, o
    escribí `SOS` en el monitor del DevKit.
-5. Lo esperado: DevKit `*** EMERGENCIA ***` → `Alerta creada ... (OK)` →
+5. Lo esperado: DevKit `*** EMERGENCIA (boton) ***` → `Alerta …: creada OK (intento 1)` →
    `Notify: HTTP 200 {"sent":1...}` → 1 pitido largo. CAM `Foto subida (OK)` →
    `Audio subido (OK)` (o "señal plana" sin micrófono). La push llega con la app cerrada
    y la foto aparece en la alerta.
