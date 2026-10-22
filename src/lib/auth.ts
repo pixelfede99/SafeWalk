@@ -6,6 +6,7 @@ import {
 } from "firebase/auth";
 import { auth } from "./firebase";
 import { createUserDoc, getUserDoc } from "./firestore";
+import { unregisterPush } from "./push";
 
 export async function signIn(email: string, password: string): Promise<User> {
   const cred = await signInWithEmailAndPassword(auth, email, password);
@@ -22,5 +23,8 @@ export async function signUp(email: string, password: string, name: string): Pro
 }
 
 export async function signOut(): Promise<void> {
+  // Antes de salir (después ya no hay permiso para escribir en users/{uid}).
+  const uid = auth.currentUser?.uid;
+  if (uid) await unregisterPush(uid);
   await fbSignOut(auth);
 }
