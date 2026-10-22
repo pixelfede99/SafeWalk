@@ -5,13 +5,13 @@
 //
 //  Escucha el enlace del DevKit (DevKit GPIO13 -> CAM GPIO3 = U0RXD) y, ante un
 //  "ALERT|<alertId>", ejecuta:
-//    1) saca una foto (OV2640) y la sube a Storage: alerts/{deviceId}/{alertId}.jpg
-//    2) graba 15s de audio (INMP441 -> I2S -> /alert.wav en la MicroSD, 1-bit)
-//       y lo sube en STREAMING a Storage: alerts/{deviceId}/{alertId}.wav
-//    3) completa photoUrl y audioUrl en el doc alerts/{alertId} (lo creó el DevKit)
+//    1) saca una foto (OV2640) y la sube YA como data URL base64 a photoUrl del
+//       doc alerts/{alertId} (lo creó el DevKit)
+//    2) graba AUDIO_FS_SECONDS de audio (INMP441 -> I2S -> PSRAM, sin SD) y lo
+//       sube igual a audioUrl. Sin micrófono (señal plana) no sube nada.
 //
-//  La foto sube desde el frame buffer (PSRAM); el audio sube en streaming desde
-//  la SD (NO se bufferiza en RAM). El enlace UART solo trae el alertId (texto).
+//  Todo va dentro del doc de Firestore porque el plan gratis de Firebase no
+//  tiene Storage. El enlace UART solo trae el alertId (texto).
 //
 //  >>> Para FLASHEAR esta placa: GPIO0 a GND al bootear y DESCONECTAR el hilo
 //      del DevKit que entra a GPIO3 (U0RXD), si no choca con el USB-serial. <<<
@@ -52,32 +52,57 @@ static bool initCamera() {
   return esp_camera_init(&c) == ESP_OK;
 }
 
+// ---------------- Data URL ----------------
+// Plan gratis (Spark) de Firebase: sin Storage. La foto y el audio van como data
+// URL base64 dentro del propio doc de la alerta; la app los muestra igual con
+// <img> y <audio>. Devuelve "" si no hay memoria.
+static String toDataUrl(const char* mime, const uint8_t* data, size_t len) {
+  size_t b64Len = 0;
+  mbedtls_base64_encode(nullptr, 0, &b64Len, data, len);
+  unsigned char* b64 = (unsigned char*)ps_malloc(b64Len + 1);
+  if (!b64 || mbedtls_base64_encode(b64, b64Len + 1, &b64Len, data, len) != 0) {
+    free(b64);
+    return "";
+  }
+  b64[b64Len] = '\0';
+  String url;
+  url.reserve(b64Len + 40);
+  url = String("data:") + mime + ";base64,";
+  url += (const char*)b64;
+  free(b64);
+  return url;
+}
+
+// El alertId llega por un cable UART y va directo a la URL de Firestore: si entra
+// ruido en la línea, mejor descartarlo que mandar una request rota.
+static bool validAlertId(const String& id) {
+  if (id.length() < 8 || id.length() > 80) return false;
+  for (size_t i = 0; i < id.length(); i++) {
+    const char c = id[i];
+    if (!isalnum(c) && c != '-' && c != '_') return false;
+  }
+  return true;
+}
+
 // ---------------- Manejo de una alerta ----------------
+//  Foto primero y subida EN EL ACTO: es lo que la familia necesita ver. El audio
+//  se graba después y llega en un segundo PATCH. Antes la foto esperaba los 15 s
+//  de grabación para salir junto con el audio.
 static void handleAlert(const String& alertId) {
   Serial.printf("\n[CAM] Procesando alerta %s\n", alertId.c_str());
-  String photoUrl = "", audioUrl = "";
+  const String docPath = String(FS_ALERTS_COLL) + "/" + alertId;
 
   // ---- 1) FOTO ----
-  // Plan gratis (Spark) de Firebase: sin Storage. La foto va como data URL base64
-  // dentro del propio doc de la alerta (photoUrl). La app la muestra igual con <img>.
   // Límite de Firestore: 1 MiB por doc -> descartamos JPEG muy grandes.
+  String photoUrl;
   camera_fb_t* fbuf = esp_camera_fb_get();
   if (fbuf) {
     if (fbuf->len <= PHOTO_MAX_JPEG_BYTES) {
-      size_t b64Len = 0;
-      mbedtls_base64_encode(nullptr, 0, &b64Len, fbuf->buf, fbuf->len);
-      unsigned char* b64 = (unsigned char*)ps_malloc(b64Len + 1);
-      if (b64 && mbedtls_base64_encode(b64, b64Len + 1, &b64Len, fbuf->buf, fbuf->len) == 0) {
-        b64[b64Len] = '\0';
-        photoUrl.reserve(b64Len + 32);
-        photoUrl = "data:image/jpeg;base64,";
-        photoUrl += (const char*)b64;
-        Serial.printf("[CAM] Foto lista (%u bytes JPEG, %u base64)\n",
-                      (unsigned)fbuf->len, (unsigned)b64Len);
-      } else {
+      photoUrl = toDataUrl("image/jpeg", fbuf->buf, fbuf->len);
+      if (photoUrl.length())
+        Serial.printf("[CAM] Foto lista (%u bytes JPEG)\n", (unsigned)fbuf->len);
+      else
         Serial.println("[CAM] Foto: sin memoria para base64");
-      }
-      free(b64);
     } else {
       Serial.printf("[CAM] Foto muy grande (%u bytes), no entra en Firestore\n", (unsigned)fbuf->len);
     }
@@ -85,33 +110,31 @@ static void handleAlert(const String& alertId) {
   } else {
     Serial.println("[CAM] Captura de foto fallo");
   }
+  if (photoUrl.length()) {
+    bool ok = fb.firestoreUpdate(docPath, "\"photoUrl\":" + FirebaseRest::fStr(photoUrl), "photoUrl");
+    Serial.printf("[CAM] Foto subida (%s)\n", ok ? "OK" : "FALLO");
+  }
+  photoUrl = String();   // liberar antes de grabar
 
-  // ---- 2) AUDIO ----
-  if (audioI2SBegin()) {
-    uint32_t pcm = recordWavToSd("/alert.wav", AUDIO_RECORD_SECONDS);
+  // ---- 2) AUDIO (a PSRAM, sin SD) ----
+  if (audioI2SBegin(AUDIO_FS_SAMPLE_RATE)) {
+    size_t wavLen = 0;
+    uint8_t* wav = recordWavToPsram(AUDIO_FS_SAMPLE_RATE, AUDIO_FS_SECONDS, wavLen);
     audioI2SEnd();
-    if (pcm > 0) {
-      File wav = SD_MMC.open("/alert.wav", FILE_READ);
-      if (wav) {
-        size_t total = wav.size();
-        String objPath = String(ST_ALERT_PREFIX) + alertId + ".wav";
-        if (fb.storageUploadStream(objPath, "audio/wav", wav, total, audioUrl))
-          Serial.printf("[CAM] Audio subido (%u bytes)\n", (unsigned)total);
-        else
-          Serial.println("[CAM] Audio: fallo al subir");
-        wav.close();
+    if (wav) {
+      String audioUrl = toDataUrl("audio/wav", wav, wavLen);
+      free(wav);
+      if (audioUrl.length()) {
+        bool ok = fb.firestoreUpdate(docPath, "\"audioUrl\":" + FirebaseRest::fStr(audioUrl), "audioUrl");
+        Serial.printf("[CAM] Audio subido (%s)\n", ok ? "OK" : "FALLO");
+      } else {
+        Serial.println("[CAM] Audio: sin memoria para base64");
       }
     }
   } else {
     Serial.println("[CAM] I2S fallo");
   }
-
-  // ---- 3) Completar URLs en el doc de alerta (PATCH parcial) ----
-  String fields = "\"photoUrl\":" + FirebaseRest::fStr(photoUrl) +
-                  ",\"audioUrl\":" + FirebaseRest::fStr(audioUrl);
-  bool ok = fb.firestoreUpdate(String(FS_ALERTS_COLL) + "/" + alertId,
-                               fields, "photoUrl,audioUrl");
-  Serial.printf("[CAM] Alerta %s actualizada (%s)\n", alertId.c_str(), ok ? "OK" : "FALLO");
+  Serial.printf("[CAM] Alerta %s terminada\n", alertId.c_str());
 }
 
 // ============================================================================
@@ -124,7 +147,8 @@ void setup() {
   Serial.print("WiFi... ");  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO");
 
   Serial.printf("Camara... %s\n", initCamera() ? "OK" : "FALLO");
-  Serial.printf("SD(1-bit)... %s\n", SD_MMC.begin("/sdcard", true) ? "OK" : "FALLO");
+  // Sin SD: el audio se graba en PSRAM (ver audio_record.h). La SD solo la usa
+  // el test test_audio_sd.
 
   Serial.print("NTP...  ");  Serial.println(fb.syncTime() ? "OK" : "FALLO");
   Serial.print("Login.. ");  Serial.println(fb.signIn(FB_DEVICE_EMAIL, FB_DEVICE_PASSWORD) ? "OK" : "FALLO");
@@ -139,7 +163,8 @@ void loop() {
     if (line.startsWith("ALERT|")) {
       String alertId = line.substring(6);
       alertId.trim();
-      if (alertId.length()) handleAlert(alertId);
+      if (validAlertId(alertId)) handleAlert(alertId);
+      else Serial.printf("[CAM] alertId invalido, ignorado: %s\n", alertId.c_str());
     }
   }
   fb.ensureToken();   // mantiene el idToken fresco entre alertas

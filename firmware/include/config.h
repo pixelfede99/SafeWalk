@@ -55,9 +55,14 @@
 #define RING_GROUP_PAUSE_MS        700     // pausa entre grupos (ayuda a ubicar la fuente)
 
 // Audio (INMP441 en el ESP32-CAM)
-#define AUDIO_SAMPLE_RATE        16000     // 16 kHz
+#define AUDIO_SAMPLE_RATE        16000     // 16 kHz (test_audio_sd, a la SD)
 #define AUDIO_BITS                  16     // 16-bit
 // (mono, canal izquierdo: L/R del INMP441 a GND)
+// Audio de la ALERTA: va como base64 dentro del doc de Firestore (plan gratis,
+// sin Storage, tope 1 MiB por doc), así que es corto y en calidad de teléfono.
+// 6 s a 8 kHz = 96 KB de WAV = ~128 KB en base64.
+#define AUDIO_FS_SAMPLE_RATE      8000
+#define AUDIO_FS_SECONDS             6
 
 // Batería 18650 (divisor 100k/100k => Vadc = Vbat/2). Ajustá tras calibrar.
 #define BATT_FULL_MV             4200.0f   // 18650 cargada

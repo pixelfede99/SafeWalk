@@ -37,10 +37,10 @@ static void writeWavHeader(File& f, uint32_t dataLen) {
 }
 
 // Inicializa el I2S para el INMP441 (RX, master, mono izquierdo).
-static bool audioI2SBegin() {
+static bool audioI2SBegin(uint32_t sampleRate = AUDIO_SAMPLE_RATE) {
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
-  cfg.sample_rate = AUDIO_SAMPLE_RATE;
+  cfg.sample_rate = sampleRate;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;     // el INMP441 entrega 24/32 bits
   cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;       // L/R a GND -> canal izquierdo
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
@@ -95,4 +95,97 @@ static uint32_t recordWavToSd(const char* path, int seconds) {
   f.close();
   Serial.printf("[AUDIO] %s -> %u bytes PCM (%d s)\n", path, pcmBytes, seconds);
   return pcmBytes;
+}
+
+// ----------------------------------------------------------------------------
+//  Grabación a MEMORIA (PSRAM), para el plan gratis de Firebase.
+//
+//  Sin Storage, el audio viaja como data URL base64 dentro del doc de la
+//  alerta (igual que la foto), y el doc tiene un tope de 1 MiB. Por eso:
+//    - 8 kHz (calidad de teléfono: alcanza para entender voz) en vez de 16 kHz
+//    - pocos segundos (AUDIO_FS_SECONDS)
+//  6 s = 96 KB de PCM = ~128 KB en base64. Y no hace falta tarjeta SD.
+//
+//  Devuelve un buffer en PSRAM con el WAV COMPLETO (cabecera + PCM) y su
+//  largo en outLen, o nullptr si falló o si no hay micrófono (señal plana).
+//  El que llama tiene que liberarlo con free().
+// ----------------------------------------------------------------------------
+static void wavHeaderToBuf(uint8_t* h, uint32_t sampleRate, uint32_t dataLen) {
+  const uint16_t bits = 16, channels = 1;
+  const uint32_t byteRate = sampleRate * channels * bits / 8;
+  const uint16_t blockAlign = channels * bits / 8;
+  auto w32 = [&](int off, uint32_t v) { memcpy(h + off, &v, 4); };
+  auto w16 = [&](int off, uint16_t v) { memcpy(h + off, &v, 2); };
+  memcpy(h, "RIFF", 4);      w32(4, 36 + dataLen);
+  memcpy(h + 8, "WAVE", 4);
+  memcpy(h + 12, "fmt ", 4); w32(16, 16); w16(20, 1); w16(22, channels);
+  w32(24, sampleRate);       w32(28, byteRate); w16(32, blockAlign); w16(34, bits);
+  memcpy(h + 36, "data", 4); w32(40, dataLen);
+}
+
+static uint8_t* recordWavToPsram(uint32_t sampleRate, int seconds, size_t& outLen) {
+  outLen = 0;
+  const uint32_t samples = sampleRate * (uint32_t)seconds;
+  // Se graba en 24 bits (int32) y recién al final se pasa a 16 bits, EN EL MISMO
+  // buffer: así la normalización trabaja con toda la resolución del micrófono
+  // (la voz a un metro llega muy baja y en 16 bits quedaría en pocos escalones).
+  uint8_t* wav = (uint8_t*)ps_malloc(44 + samples * 4);
+  if (!wav) { Serial.println("[AUDIO] sin PSRAM para grabar"); return nullptr; }
+  int32_t* raw = (int32_t*)(wav + 44);
+
+  // El micrófono arranca con unos ms de basura: los descartamos.
+  int32_t i2sBuf[256];
+  size_t bytesRead = 0;
+  for (int i = 0; i < 4; i++)
+    i2s_read(AUDIO_I2S_PORT, i2sBuf, sizeof(i2sBuf), &bytesRead, pdMS_TO_TICKS(100));
+
+  uint32_t n = 0;
+  int64_t sum = 0;
+  while (n < samples) {
+    // Timeout y no portMAX_DELAY: si el I2S se cuelga, mejor una alerta sin
+    // audio que una CAM trabada para siempre.
+    if (i2s_read(AUDIO_I2S_PORT, i2sBuf, sizeof(i2sBuf), &bytesRead, pdMS_TO_TICKS(500)) != ESP_OK ||
+        bytesRead == 0) {
+      Serial.println("[AUDIO] el I2S no entrega datos");
+      free(wav);
+      return nullptr;
+    }
+    const int got = bytesRead / 4;
+    for (int i = 0; i < got && n < samples; i++, n++) {
+      // El dato útil del INMP441 está en los 24 bits altos de cada palabra de 32.
+      raw[n] = i2sBuf[i] >> 8;
+      sum += raw[n];
+    }
+  }
+
+  // Sacar el offset de continua y buscar el pico.
+  const int32_t dc = (int32_t)(sum / (int64_t)samples);
+  int32_t peak = 0;
+  for (uint32_t i = 0; i < samples; i++) {
+    const int32_t v = abs(raw[i] - dc);
+    if (v > peak) peak = v;
+  }
+  if (peak < 64) {
+    // Señal plana: no hay micrófono conectado (o está roto). Subir 6 s de
+    // silencio solo engordaría el doc de la alerta.
+    Serial.println("[AUDIO] señal plana: sin microfono, no se sube audio");
+    free(wav);
+    return nullptr;
+  }
+
+  // Normalizar: el pico al ~80 % de la escala de 16 bits. Tope de ganancia
+  // x64 (36 dB) respecto de tomar los 16 bits altos: más que eso solo sube el
+  // ruido de fondo del INMP441.
+  const float scale = min(26000.0f / (float)peak, 64.0f / 256.0f);
+  int16_t* pcm = (int16_t*)raw;   // en el lugar: el int16 i nunca pisa un int32 sin leer
+  for (uint32_t i = 0; i < samples; i++) {
+    const int32_t v = (int32_t)((raw[i] - dc) * scale);
+    pcm[i] = (int16_t)constrain(v, -32768, 32767);
+  }
+
+  wavHeaderToBuf(wav, sampleRate, samples * 2);
+  outLen = 44 + samples * 2;
+  Serial.printf("[AUDIO] %d s a %lu Hz en PSRAM (%u bytes, ganancia x%.1f)\n",
+                seconds, (unsigned long)sampleRate, (unsigned)outLen, scale * 256.0f);
+  return wav;
 }
