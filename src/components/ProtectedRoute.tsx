@@ -34,7 +34,16 @@ export function ProtectedRoute({ role, requiresDevice = true, children }: Props)
     }
   }, [user, userDoc, loading, router, role, requiresDevice]);
 
-  if (loading || !user || !userDoc?.role || (requiresDevice && !userDoc.deviceId)) {
+  // Mismas condiciones que las redirecciones de arriba: si no, con el rol
+  // equivocado la pantalla se llegaba a dibujar (y el lector de pantalla a
+  // leerla) antes de redirigir.
+  if (
+    loading ||
+    !user ||
+    !userDoc?.role ||
+    (role && userDoc.role !== role) ||
+    (requiresDevice && !userDoc.deviceId)
+  ) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-12 h-12 rounded-full border-4 border-accent border-t-transparent animate-spin" />
