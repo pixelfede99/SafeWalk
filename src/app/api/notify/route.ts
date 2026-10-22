@@ -126,16 +126,25 @@ export async function POST(req: Request) {
 
   const deviceName = dev.name || "el bastón";
   // Mensaje solo-data: el service worker (public/sw.js) arma la notificación.
-  const res = await messaging.sendEachForMulticast({
-    tokens,
-    data: {
-      alertId,
-      title: "¡Alerta de SafeWalk!",
-      body: alertBody(alert, deviceName),
-      url: "/dashboard"
-    },
-    webpush: { headers: { Urgency: "high", TTL: "3600" } }
-  });
+  let res;
+  try {
+    res = await messaging.sendEachForMulticast({
+      tokens,
+      data: {
+        alertId,
+        title: "¡Alerta de SafeWalk!",
+        body: alertBody(alert, deviceName),
+        url: "/dashboard"
+      },
+      webpush: { headers: { Urgency: "high", TTL: "3600" } }
+    });
+  } catch (err) {
+    // FCM no respondió: desmarcamos la alerta para que un reintento (el bastón
+    // reintenta ante 5xx) la pueda mandar. Si no, quedaba "notificada" sin push.
+    console.error("[notify] FCM falló:", err);
+    await alertRef.update({ notified: false }).catch(() => undefined);
+    return NextResponse.json({ error: "fcm no respondió" }, { status: 502 });
+  }
 
   await removeDeadTokens(db, res.responses, [...tokenOwner.entries()]);
 
