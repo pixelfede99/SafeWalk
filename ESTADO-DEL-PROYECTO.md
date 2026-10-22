@@ -156,6 +156,13 @@ prueba completa (al final de esta sección).
 - El `alertId` que llega por el cable se valida antes de usarlo. Foto y audio con 3
   intentos cada uno (la foto del momento no se puede volver a sacar).
 - Nuevo env **`esp32cam_nobod`** para diagnosticar el brownout (ver ALIMENTACION-CAM.md).
+- **Micrófono: WS pasa de GPIO4 a GPIO14** (cablealo así cuando lo conectes). GPIO4 es el
+  LED de flash: durante la grabación parpadeaba (luz fuerte a la cara y ~80 mA más en una
+  placa justa de alimentación). Sin SD, GPIO14 quedó libre. El LED queda apagado.
+- **Detecta solo el canal del micrófono** (algunas versiones del driver I2S tienen
+  izquierdo/derecho invertidos y habría grabado silencio).
+- **`test_audio`** reemplaza a `test_audio_sd`: graba 3 s en PSRAM e imprime el audio
+  como data URL para **escucharlo pegándolo en el navegador**. No necesita SD.
 
 ### Estado de las placas al terminar la sesión 5
 - **DevKit:** con el firmware nuevo de la rama, andando en el WiFi de casa, en **COM3**.
@@ -302,7 +309,8 @@ poll: el pedido llega con el heartbeat.
   partitions 0x8000, boot_app0 0xe000, firmware 0x10000). Serial de la CAM a **9600**.
   Al conectar WiFi a veces da `Brownout detector was triggered` y reinicia (alimentación
   floja): 5V cortos y directos, idealmente un capacitor 100–1000 µF en 5V/GND.
-  **Pendiente CAM:** probar con SD (FAT32) + mic → audio (sin Storage hay que ver dónde subirlo).
+  ~~Pendiente CAM: probar con SD + mic~~ → **resuelto en la sesión 5:** el audio va a la
+  PSRAM y se sube en base64 a Firestore, sin SD ni Storage. Test: `test_audio`.
 - **Prueba de alerta DevKit→CAM:** el enlace GPIO13→U0R **anda**. Arreglado (2026-10-09/13):
   1. Sin MPU-6050 el DevKit disparaba `EMERGENCIA (caida)` cada ~2.5 s → ahora chequea
      WHO_AM_I al arrancar y si no responde desactiva las caídas.
@@ -316,7 +324,7 @@ poll: el pedido llega con el heartbeat.
   Vercel necesita `FIREBASE_SERVICE_ACCOUNT` (secret, JSON de cuenta de servicio) y
   `NEXT_PUBLIC_FIREBASE_VAPID_KEY` — **ya cargadas**. Tokens en `users/{uid}.fcmTokens`.
 - **Micrófono INMP441:** va en el **ESP32-CAM** (no en el DevKit): VDD→3.3V, GND, L/R→GND,
-  WS→GPIO4, SCK→GPIO12, SD→GPIO13.
+  **WS→GPIO14** (antes GPIO4, que es el LED de flash: ver sesión 5), SCK→GPIO12, SD→GPIO13.
 - **Alimentación:** comprar un **TP4056 CON protección** (DW01+FS8205, con pads OUT+/OUT−
   separados de B+/B−); el básico de 4 pines no protege la batería. **MT3608:** ajustar el
   trimpot a **5.0V midiendo con multímetro ANTES** de conectarlo al ESP32.
@@ -408,8 +416,8 @@ contraseña del WiFi al compilar con credenciales reales).
 | Componente | Pin | Notas |
 |---|---|---|
 | Cámara OV2640 | ribbon | solo encastrada |
-| MicroSD | ranura | FAT32, modo 1-bit |
-| INMP441 SCK/WS/SD | 12 / 4 / 13 | VDD a **3.3V** (no 5V) |
+| MicroSD | ranura | **ya no se usa** (el audio va a la PSRAM) |
+| INMP441 SCK/WS/SD | 12 / **14** / 13 | VDD a **3.3V** (no 5V) |
 | Enlace ← DevKit | 3 (U0RXD) | desconectar para flashear por USB |
 
 **GND de las dos placas siempre unido.**

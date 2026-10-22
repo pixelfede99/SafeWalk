@@ -149,13 +149,17 @@ Si la cámara no inicializa, casi siempre es el conector ribbon mal encastrado
 
 ### Para el audio
 
-Hace falta una **microSD formateada en FAT32** puesta en la ranura, y el
-micrófono INMP441 cableado así: VDD→**3.3V** (no 5V), GND→GND, L/R→GND,
-WS→GPIO4, SCK→GPIO12, SD→GPIO13.
+**No hace falta tarjeta SD**: el audio se graba en la PSRAM. Solo el micrófono
+INMP441 cableado así: VDD→**3.3V** (no 5V), GND→GND, L/R→GND,
+**WS→GPIO14**, SCK→GPIO12, SD→GPIO13.
 
 ```bash
-pio run -e test_audio_sd -t upload -t monitor
+pio run -e test_audio          # flashear con esptool (ver arriba); monitor a 115200
 ```
+
+Graba 3 s y te imprime el audio como `data:audio/wav;base64,...`: copiá esa línea
+entera, pegala en la barra del navegador y se escucha. También dice por qué canal
+llegó el micrófono (el driver a veces tiene izquierdo/derecho invertidos).
 
 ---
 

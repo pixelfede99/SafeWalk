@@ -19,7 +19,6 @@
 //  >>> AJUSTAR <<< credenciales en include/secrets.h (WiFi + Firebase).
 // ============================================================================
 #include <Arduino.h>
-#include <SD_MMC.h>
 #include "esp_camera.h"
 #include "config.h"
 #include "camera_pins_aithinker.h"
@@ -161,6 +160,8 @@ void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 #endif
   Serial.begin(CAM_LINK_BAUD);   // U0RXD recibe el alertId del DevKit a esta velocidad
+  pinMode(PIN_FLASH_LED, OUTPUT);  // el LED de flash no se usa: apagado y quieto
+  digitalWrite(PIN_FLASH_LED, LOW);
   Serial.println("\n=== SafeWalk ESP32-CAM ===");
 #ifdef CAM_DISABLE_BROWNOUT
   Serial.println("!!! DIAGNOSTICO: detector de brownout APAGADO (no usar en el baston) !!!");
@@ -171,8 +172,7 @@ void setup() {
   Serial.print("WiFi... ");  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO");
 
   Serial.printf("Camara... %s\n", initCamera() ? "OK" : "FALLO");
-  // Sin SD: el audio se graba en PSRAM (ver audio_record.h). La SD solo la usa
-  // el test test_audio_sd.
+  // Sin SD: el audio se graba en PSRAM (ver audio_record.h).
 
   Serial.print("NTP...  ");  Serial.println(fb.syncTime() ? "OK" : "FALLO");
   Serial.print("Login.. ");  Serial.println(fb.signIn(FB_DEVICE_EMAIL, FB_DEVICE_PASSWORD) ? "OK" : "FALLO");

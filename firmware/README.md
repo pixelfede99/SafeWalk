@@ -116,10 +116,10 @@ reintenta sola cada 10 s durante 10 min con la hora y ubicación del momento.
 
 | Función | GPIO | Notas |
 |---|---|---|
-| MicroSD CLK / CMD / D0 | 14 / 15 / 2 | **SD_MMC modo 1-BIT** (solo `test_audio_sd`; la alerta no usa SD) |
-| INMP441 BCLK (SCK) | 12 | liberado en SD 1-bit |
-| INMP441 WS (LRCK) | 4 | comparte el flash LED (parpadea al grabar) |
-| INMP441 DATA (SD) | 13 | liberado en SD 1-bit |
+| INMP441 BCLK (SCK) | 12 | strapping, pero el micrófono no lo maneja: OK |
+| INMP441 WS (LRCK) | 14 | antes GPIO4 (ver revisiones) |
+| INMP441 DATA (SD) | 13 | |
+| Flash LED | 4 | no se usa: el firmware lo deja apagado |
 | Disparo desde DevKit | 3 (U0RXD) | **desconectar para flashear por USB** |
 | Cámara OV2640 | varios | pines fijos AI-Thinker (ver `camera_pins_aithinker.h`) |
 
@@ -134,8 +134,10 @@ INMP441: `VDD`→3.3V, `GND`→GND, `L/R`→GND (canal izquierdo).
    **GPIO13** (libre, no strapping). GPIO12 queda sin usar en el DevKit.
 2. **GPIO2 (buzzer) es strapping pero OK** porque lo maneja un transistor: el pin
    solo ve la base referida a GND, no lo fuerza a HIGH en el boot.
-3. **SD del ESP32-CAM en 1-BIT** usa solo GPIO14/15/2 y **libera GPIO4/12/13** →
-   ahí entra el I2S del micrófono. **No hay conflicto** con la SD.
+3. **Sin tarjeta SD** (el audio va a la PSRAM) quedan libres GPIO2/4/12/13/14/15. El
+   WS del micrófono pasó de **GPIO4 a GPIO14**: GPIO4 es el LED de flash, que durante
+   la grabación parpadeaba a 8 kHz (luz fuerte a la cara de la persona y ~80 mA más
+   en una placa que ya anda justa de alimentación).
 4. **Buzzer 5V → necesita transistor.** Un buzzer activo tira ~20–30 mA, por
    encima de lo recomendado para un GPIO; va con **BC547** igual que el motor.
 5. **Batería:** divisor **100k/100k** (Vbat/2) a **GPIO35** (ADC1, porque ADC2 no
@@ -185,7 +187,7 @@ pio run -e test_hcsr04 -t upload -t monitor
 Lista de `env` de test: `test_buzzer`, `test_button`, `test_motor`,
 `test_hcsr04`, `test_mpu6050`, `test_gps`, `test_battery`,
 `test_wifi_firestore`, `test_trigger_tx` (DevKit) · `test_camera`,
-`test_audio_sd`, `test_trigger_rx` (ESP32-CAM). Diagnóstico: `esp32cam_nobod`
+`test_audio`, `test_trigger_rx` (ESP32-CAM). Diagnóstico: `esp32cam_nobod`
 (CAM con el detector de brownout apagado, ver [ALIMENTACION-CAM.md](ALIMENTACION-CAM.md)).
 
 > La CAM con el adaptador CP2102 se flashea mejor con **esptool directo**: comando
@@ -220,7 +222,7 @@ Orden recomendado para ir armando y probando el hardware:
 `test_trigger_tx`
 
 **Fase B — ESP32-CAM (solo hardware real):**
-`test_camera` → `test_audio_sd` → `test_trigger_rx`
+`test_camera` → `test_audio` → `test_trigger_rx`
 
 **Fase C — Integración:** `devkit` + `esp32cam` juntos (flujo de emergencia completo).
 

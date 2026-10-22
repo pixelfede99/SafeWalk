@@ -34,7 +34,6 @@
 // del GPS (5–10 m) estando quieto.
 #define HISTORY_MIN_MOVE_M         20.0
 #define ULTRASONIC_INTERVAL_MS    100UL   // cada cuánto medimos distancia (10 Hz)
-#define AUDIO_RECORD_SECONDS       15     // duración de la grabación de la alerta
 
 // "Encontrar el bastón": el pedido de la app llega en la respuesta del heartbeat
 // (ver devkit_main.cpp), así que tarda como mucho HEARTBEAT_INTERVAL_MS. Antes era
@@ -54,13 +53,11 @@
 #define RING_BEEP_GROUP              3     // pitidos por grupo
 #define RING_GROUP_PAUSE_MS        700     // pausa entre grupos (ayuda a ubicar la fuente)
 
-// Audio (INMP441 en el ESP32-CAM)
-#define AUDIO_SAMPLE_RATE        16000     // 16 kHz (test_audio_sd, a la SD)
-#define AUDIO_BITS                  16     // 16-bit
-// (mono, canal izquierdo: L/R del INMP441 a GND)
-// Audio de la ALERTA: va como base64 dentro del doc de Firestore (plan gratis,
-// sin Storage, tope 1 MiB por doc), así que es corto y en calidad de teléfono.
-// 6 s a 8 kHz = 96 KB de WAV = ~128 KB en base64.
+// Audio de la ALERTA (INMP441 en el ESP32-CAM; mono, L/R del INMP441 a GND).
+// Va como base64 dentro del doc de Firestore (plan gratis, sin Storage, tope
+// 1 MiB por doc), así que es corto y en calidad de teléfono: PCM 16 bits,
+// 6 s a 8 kHz = 96 KB de WAV = ~128 KB en base64. Se graba en la PSRAM: no hace
+// falta tarjeta SD.
 #define AUDIO_FS_SAMPLE_RATE      8000
 #define AUDIO_FS_SECONDS             6
 
@@ -113,22 +110,27 @@
 
 // ----------------------------------------------------------------------------
 //  PINES — ESP32-CAM AI-Thinker (cámara + audio)
-//  Pines MUY justos: cámara + PSRAM + SD(1-bit) ocupan casi todo.
-//  En SD_MMC 1-bit se liberan GPIO4, GPIO12 y GPIO13 -> los usamos para el I2S.
+//  Pines MUY justos: cámara + PSRAM ocupan casi todo. Sin tarjeta SD (el audio
+//  va a la PSRAM) quedan libres GPIO2, 4, 12, 13, 14 y 15.
 // ----------------------------------------------------------------------------
 #ifdef BOARD_ESP32CAM
   // I2S micrófono INMP441 (movido desde el DevKit a esta placa)
   #define PIN_I2S_BCLK        12     // SCK del INMP441
-  #define PIN_I2S_LRCK         4     // WS  del INMP441  (comparte el flash LED: parpadea al grabar)
+  #define PIN_I2S_LRCK        14     // WS  del INMP441
   #define PIN_I2S_DATA        13     // SD  del INMP441  (entrada al ESP32)
+  // WS estaba en GPIO4, que es el LED de flash de la placa: durante los 6 s de
+  // grabación el LED parpadeaba a 8 kHz (luz blanca fuerte a la cara de la
+  // persona) y sumaba ~80 mA en una placa que ya anda justa de alimentación.
+  // Se usaba GPIO4 porque la SD ocupaba 2/14/15; sin SD, GPIO14 queda libre y no
+  // es pin de arranque.
 
   // Línea de disparo desde el DevKit (UART). Llega al U0RXD.
   // >>> Desconectá este hilo para flashear el CAM por USB <<<
   #define PIN_TRIGGER_RX       3     // U0RXD <- DevKit GPIO13
   #define CAM_LINK_BAUD     9600
 
-  // Flash LED on-board (lo "sacrificamos": GPIO4 ahora es I2S WS)
-  // #define PIN_FLASH_LED      4
+  // Flash LED on-board: se fuerza APAGADO al arrancar (no se usa).
+  #define PIN_FLASH_LED        4
 #endif
 
 // ----------------------------------------------------------------------------
