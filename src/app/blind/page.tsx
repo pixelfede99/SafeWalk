@@ -33,6 +33,13 @@ const SOS_HOLD_MS = 3000;
 /** Antes de esto el gesto se siente como un tap común y no decimos nada. */
 const HOLD_FEEDBACK_MS = 600;
 
+/**
+ * Cuánto esperar la confirmación del bastón antes de avisar que no llegó. El
+ * bastón revisa las órdenes cada 5 s (RING_POLL_INTERVAL_MS) y la confirmación
+ * tarda un poco más en volver: 20 s es el doble del peor caso normal.
+ */
+const RING_ACK_TIMEOUT_MS = 20_000;
+
 export default function BlindPage() {
   return (
     <ProtectedRoute role="blind_user">
@@ -121,6 +128,22 @@ function BlindContent() {
     if ("vibrate" in navigator) navigator.vibrate(200);
   }, [acked, announce]);
 
+  // Si el bastón no confirma, decirlo. Sin esto, después de "empieza a pitar en
+  // unos segundos" venía silencio, y la persona no tenía cómo saber si había que
+  // esperar más o si el pedido no llegó. No cancelamos nada: si la confirmación
+  // llega tarde, el efecto de arriba igual la anuncia.
+  useEffect(() => {
+    if (ringToken === null || acked) return;
+    const t = setTimeout(
+      () =>
+        announce(
+          "El bastón todavía no confirmó el pedido. Si no lo escuchás, puede estar sin conexión."
+        ),
+      RING_ACK_TIMEOUT_MS
+    );
+    return () => clearTimeout(t);
+  }, [ringToken, acked, announce]);
+
   // Cuenta regresiva local mientras dura el pitido.
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -205,7 +228,9 @@ function BlindContent() {
       announce(
         source === "phone"
           ? "Alerta enviada con tu ubicación. Tus familiares fueron notificados."
-          : "Alerta enviada. No se pudo obtener tu ubicación, se mandó la última del bastón."
+          : source === "device"
+            ? "Alerta enviada. No se pudo obtener tu ubicación, se mandó la última del bastón."
+            : "Alerta enviada, pero sin ubicación: ni el teléfono ni el bastón la tenían."
       );
       if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
     } catch (err) {
