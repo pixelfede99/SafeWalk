@@ -23,6 +23,14 @@ no saca fotos ni sube nada.
 Ojo: el 6/10 y el 13/10 esta misma CAM **sí conectaba** al WiFi. Algo cambió en
 el camino de la alimentación (cables, protoboard, pin) o en la placa.
 
+**Dato del 22/10 (alimentada desde el VIN del DevKit):** el brownout ya no espera
+al WiFi. A 115200 se ve `entry 0x400805e4` → `Brownout detector was triggered` →
+`rst:0xc (SW_CPU_RESET)`, en loop: se cae **apenas arranca el programa**, con el
+consumo normal (~100 mA), sin ningún pico de radio. Una fuente "floja" no explica
+eso: apunta a **mucha resistencia en el camino** (dupont flojo, contacto del
+protoboard, pin equivocado) o a **un regulador de la CAM dañado**. Por eso los
+puntos 1, 2 y 5 de abajo van primero.
+
 ## Por qué pasa
 
 Al prender el WiFi, el ESP32 calibra la radio y pide un pico de **~400–500 mA**
