@@ -27,9 +27,20 @@ static const char* HOST_ST     = "firebasestorage.googleapis.com";
 //  Deja en outResponse SOLO el cuerpo limpio. Devuelve true si 2xx.
 // ----------------------------------------------------------------------------
 static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& outResponse) {
+  // --- esperar el primer byte ---
+  // readStringUntil() corta a 1 s sin datos. Si Firestore tardaba más en contestar,
+  // la status line llegaba vacía (código 0) y TODA la respuesta cruda (headers,
+  // marcadores de chunk) terminaba en el body. Por eso esperamos explícitamente.
+  outCode = 0;
+  const uint32_t firstByteDeadline = millis() + 10000;
+  while (!client.available() && client.connected() &&
+         (int32_t)(firstByteDeadline - millis()) > 0) {
+    delay(5);
+  }
+  if (!client.available()) { outResponse = ""; return false; }   // sin respuesta
+
   // --- status line ---
   String statusLine = client.readStringUntil('\n');
-  outCode = 0;
   { int sp = statusLine.indexOf(' ');
     if (sp > 0) outCode = statusLine.substring(sp + 1, sp + 4).toInt(); }
 
@@ -125,7 +136,7 @@ bool FirebaseRest::httpJson(const char* host, const String& path, const char* me
                             bool withAuth) {
   WiFiClientSecure client;
   client.setInsecure();   // <-- SEGURIDAD: en producción usar setCACert(googleRootCA)
-  if (!client.connect(host, 443)) { outCode = -1; return false; }
+  if (!client.connect(host, 443)) { outCode = _lastCode = -1; return false; }
 
   String req = String(method) + " " + path + " HTTP/1.1\r\n";
   req += "Host: " + String(host) + "\r\n";
@@ -142,12 +153,13 @@ bool FirebaseRest::httpJson(const char* host, const String& path, const char* me
   size_t len = req.length(), sent = 0;
   while (sent < len) {
     size_t w = client.write(p + sent, min((size_t)1024, len - sent));
-    if (w == 0) { outCode = -2; client.stop(); return false; }
+    if (w == 0) { outCode = _lastCode = -2; client.stop(); return false; }
     sent += w;
   }
 
   bool ok = readHttpResponse(client, outCode, outResponse);
   client.stop();
+  _lastCode = outCode;
   return ok;
 }
 
@@ -155,6 +167,9 @@ bool FirebaseRest::httpJson(const char* host, const String& path, const char* me
 //  Login (Identity Toolkit) y refresh de token
 // ----------------------------------------------------------------------------
 bool FirebaseRest::signIn(const char* email, const char* password) {
+  // Se guardan para poder re-loguear solos si el refresh del token falla.
+  _email = email;
+  _password = password;
   String path = String("/v1/accounts:signInWithPassword?key=") + FB_API_KEY;
   String body = String("{\"email\":\"") + email + "\",\"password\":\"" + password +
                 "\",\"returnSecureToken\":true}";
@@ -176,13 +191,25 @@ bool FirebaseRest::ensureToken() {
   // Refrescar si faltan menos de 5 min para vencer.
   if (_idToken.length() && (long)(_tokenExpiryMs - millis()) > 5UL * 60UL * 1000UL)
     return true;
+  if (refreshIdToken()) return true;
+
+  // Plan B: si el refresh falló (corte de WiFi justo en ese momento, refresh token
+  // revocado, etc.), volver a loguear con email/password. Sin esto, a la hora el
+  // token vencía y el bastón quedaba sin poder escribir hasta que lo reiniciaran.
+  // No reintentamos en cada llamada: el login también abre TLS y bloquea el loop.
+  if (!_email.length()) return false;
+  if (_lastReloginMs && millis() - _lastReloginMs < 30000UL) return false;
+  _lastReloginMs = millis();
+  Serial.println("[FB] refresh del token fallo, re-logueando...");
+  return signIn(_email.c_str(), _password.c_str());
+}
+
+bool FirebaseRest::refreshIdToken() {
   if (!_refreshToken.length()) return false;
 
   String path = String("/v1/token?key=") + FB_API_KEY;
   String body = "grant_type=refresh_token&refresh_token=" + _refreshToken;
-  // Este endpoint usa form-urlencoded, no JSON; reusamos httpJson cambiando el body.
-  // (El header Content-Type sigue siendo json pero Google lo acepta igual; si no,
-  //  ver nota. Para máxima compatibilidad re-logueamos si falla.)
+  // Este endpoint usa form-urlencoded, no JSON, por eso no pasa por httpJson.
   String resp; int code;
   WiFiClientSecure client; client.setInsecure();
   if (!client.connect(HOST_TOKEN, 443)) return false;
@@ -193,7 +220,10 @@ bool FirebaseRest::ensureToken() {
   readHttpResponse(client, code, resp);
   client.stop();
 
-  if (code < 200 || code >= 300) return false;
+  if (code < 200 || code >= 300) {
+    Serial.printf("[FB] refresh token fallo (%d)\n", code);
+    return false;
+  }
   JsonDocument d; if (deserializeJson(d, resp)) return false;
   _idToken      = d["id_token"].as<String>();
   _refreshToken = d["refresh_token"].as<String>();
@@ -268,9 +298,12 @@ bool FirebaseRest::firestoreGet(const String& docPath, String& outJson) {
   // GET sin body: httpJson manda Content-Length: 0, que Google acepta.
   bool ok = httpJson(HOST_FS, fsDocPath(docPath), "GET", "", outJson, code, true);
   // El 404 es esperable y NO es un error: significa que la app todavía no
-  // escribió ninguna orden para este bastón. No lo logueamos para no ensuciar
-  // el serial cada pocos segundos.
-  if (!ok && code != 404) Serial.printf("[FB] firestoreGet (%d): %s\n", code, outJson.c_str());
+  // escribió ninguna orden para este bastón. Los demás errores se loguean solo
+  // cuando cambian: este GET corre cada pocos segundos y un 403 repetido tapaba
+  // todo lo demás en el monitor serie.
+  if (!ok && code != 404 && code != _lastGetErr)
+    Serial.printf("[FB] firestoreGet (%d): %s\n", code, outJson.c_str());
+  _lastGetErr = ok ? 0 : code;
   return ok;
 }
 

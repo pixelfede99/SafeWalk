@@ -75,10 +75,19 @@ class FirebaseRest {
 
   const String& idToken() const { return _idToken; }
 
+  // Código HTTP de la última request de Firestore (-1 = no conectó, 0 = sin respuesta).
+  int lastHttpCode() const { return _lastCode; }
+
  private:
   String _idToken;
   String _refreshToken;
   uint32_t _tokenExpiryMs = 0;   // millis() en que vence
+  String _email, _password;      // para re-loguear si el refresh falla
+  uint32_t _lastReloginMs = 0;
+  int _lastCode = 0;
+  int _lastGetErr = 0;
+
+  bool refreshIdToken();
 
   bool httpJson(const char* host, const String& path, const char* method,
                const String& body, String& outResponse, int& outCode,
