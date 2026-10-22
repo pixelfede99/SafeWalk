@@ -83,29 +83,56 @@ export function listenUserDoc(uid: string, cb: (u: UserDoc | null) => void): Uns
 
 // ----------------- DEVICES -----------------
 
+/**
+ * Vincula un bastón a la cuenta. Devuelve si quedó como dueño o como cuidador.
+ *
+ * Antes pisaba el doc sin mirar: si OTRO familiar emparejaba el mismo bastón (en
+ * vez de usar el código de invitación), pasaba a ser el dueño, se borraba la
+ * lista de cuidadores y cambiaba el código. El dueño original seguía viéndolo,
+ * pero dejaba de recibir las push (/api/notify solo avisa a ownerUid +
+ * caregiverUids) sin enterarse. Ahora, si ya tiene dueño, se suma como cuidador.
+ *
+ * Ojo: que el doc exista no significa que tenga dueño. El heartbeat del bastón
+ * crea `devices/{id}` con solo la telemetría si nadie lo emparejó todavía.
+ */
 export async function createDevice(
   deviceId: string,
   ownerUid: string,
   name: string,
   bluetoothId?: string
-): Promise<void> {
+): Promise<"owner" | "caregiver"> {
+  const ref = doc(db, "devices", deviceId);
+  const snap = await getDoc(ref);
+  const existing = snap.exists() ? (snap.data() as Partial<DeviceDoc>) : null;
+
+  if (existing?.ownerUid && existing.ownerUid !== ownerUid) {
+    await updateDoc(ref, { caregiverUids: arrayUnion(ownerUid) });
+    return "caregiver";
+  }
+
   await setDoc(
-    doc(db, "devices", deviceId),
+    ref,
     {
       deviceId,
       name,
       ownerUid,
-      caregiverUids: [],
-      batteryLevel: -1, // "sin medir" hasta el primer heartbeat (antes decía 100 %)
-      isOnline: false,
-      lastSeen: serverTimestamp(),
-      location: { lat: 0, lng: 0 },
-      speed: 0,
       bluetoothId: bluetoothId ?? null,
-      inviteCode: generateInviteCode()
+      // Lo que ya tenga (cuidadores, código, telemetría del bastón) no se toca.
+      ...(existing?.caregiverUids ? {} : { caregiverUids: [] }),
+      ...(existing?.inviteCode ? {} : { inviteCode: generateInviteCode() }),
+      ...(existing
+        ? {}
+        : {
+            batteryLevel: -1, // "sin medir" hasta el primer heartbeat (antes decía 100 %)
+            isOnline: false,
+            lastSeen: serverTimestamp(),
+            location: { lat: 0, lng: 0 },
+            speed: 0
+          })
     },
     { merge: true }
   );
+  return "owner";
 }
 
 /** Busca un dispositivo por código de invitación y agrega al usuario como cuidador. */
