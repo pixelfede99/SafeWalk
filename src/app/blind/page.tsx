@@ -123,6 +123,10 @@ function BlindContent() {
     if (!acked) return;
     announce("El bastón está sonando. Seguí el pitido.");
     if ("vibrate" in navigator) navigator.vibrate(200);
+    // La cuenta regresiva arranca de nuevo cuando el bastón EMPIEZA a sonar (hasta
+    // 10 s después del pedido): si no, la pantalla daba el pitido por terminado
+    // mientras el bastón seguía sonando, y el botón ofrecía "sonar" en vez de "parar".
+    setSecondsLeft(RING_SECONDS);
   }, [acked, announce]);
 
   // Si el bastón no confirma, decirlo. Sin esto, después de "empieza a pitar en
