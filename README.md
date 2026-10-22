@@ -8,7 +8,11 @@ Firestore directamente vía la REST API de Firebase, esta app no controla el bas
 ## Stack
 
 - **Next.js 14** (App Router) + **TypeScript** + **Tailwind CSS**
-- **Firebase**: Auth (email/password), Firestore (real-time), Storage (fotos/audios)
+- **Firebase** en plan **gratis (Spark)**: Auth (email/password) y Firestore (real-time).
+  **Sin Storage ni Cloud Functions** (exigen el plan pago): la foto y el audio de las
+  alertas viajan como *data URL* base64 dentro del doc de la alerta.
+- **Push con la app cerrada**: ruta `/api/notify` en **Vercel** (firebase-admin + FCM),
+  también gratis.
 - **Leaflet.js** + OpenStreetMap (mapas gratuitos)
 - **PWA** instalable (manifest + service worker)
 
@@ -24,18 +28,21 @@ src/
 │   ├── dashboard/         # vista del cuidador (mapa + panel)
 │   ├── blind/             # vista simplificada del usuario no vidente
 │   ├── alerts/            # historial de alertas con filtro de fecha
+│   ├── account/           # perfil, círculos, códigos de invitación, prueba de push
+│   ├── api/notify/        # push FCM a la familia (corre en Vercel)
 │   └── page.tsx           # router según estado del usuario
-├── components/            # Map, DevicePanel, AlertBanner, BatteryIcon, etc.
+├── components/            # Map, DevicePanel, AlertBanner, AlertLocationMap, PushTestCard, etc.
 ├── context/AuthContext.tsx
 ├── hooks/                 # usePageVisibility, useDevice, useAlerts
-├── lib/                   # firebase, auth, firestore, storage, bluetooth, notifications
+├── lib/                   # firebase, firebaseAdmin, auth, firestore, location, push, ...
 └── types/                 # tipos compartidos
 public/
 ├── manifest.json
-├── sw.js                  # service worker
+├── sw.js                  # service worker (muestra las push con la app cerrada)
 └── icons/                 # iconos PWA (ver icons/README.md)
 firestore.rules            # reglas de seguridad para Firestore
-storage.rules              # reglas para Firebase Storage
+storage.rules              # NO se usa (el plan gratis no tiene Storage)
+firmware/                  # ESP32 DevKit + ESP32-CAM (ver firmware/README.md)
 ```
 
 ## Instalación
@@ -56,7 +63,8 @@ Abre http://localhost:3000.
    creá un proyecto nuevo (ej. `safewalk-capstone`).
 2. Habilitá **Authentication → Email/Password**.
 3. Habilitá **Firestore Database** (modo producción).
-4. Habilitá **Storage**.
+4. **Storage no hace falta** (y en el plan gratis no está): las fotos y audios van
+   dentro de Firestore.
 5. En *Project Settings → General → Your apps*, agregá una **app web**.
    Copiá las credenciales que te muestra y pegalas en `.env.local`:
 
@@ -69,16 +77,18 @@ Abre http://localhost:3000.
    NEXT_PUBLIC_FIREBASE_APP_ID=...
    ```
 
-6. Subí las reglas de seguridad:
+6. Subí las reglas de seguridad de Firestore: en la consola, **Firestore Database →
+   Reglas**, pegá el contenido de `firestore.rules` y tocá **Publicar**. (O con la
+   CLI: `firebase deploy --only firestore:rules`.) **Cada vez que cambie
+   `firestore.rules` hay que volver a publicarlas**: el archivo del repo no se aplica solo.
 
-   ```bash
-   npm install -g firebase-tools
-   firebase login
-   firebase init firestore storage   # apuntá a tu proyecto
-   firebase deploy --only firestore:rules,storage:rules
-   ```
-
-   o copiá el contenido de `firestore.rules` y `storage.rules` desde la consola web.
+7. Para las **push con la app cerrada**: `NEXT_PUBLIC_FIREBASE_VAPID_KEY` (Cloud
+   Messaging → Web Push certificates) y, solo en el servidor,
+   `FIREBASE_SERVICE_ACCOUNT` (Cuentas de servicio → Generar nueva clave privada, el
+   JSON completo). Ver `.env.local.example`. En Vercel van en Settings → Environment
+   Variables, y después hay que hacer **Redeploy**. Para verificar:
+   `GET /api/notify` tiene que responder `{"configured":true}`, y en la app,
+   **Mi cuenta → Notificaciones → Probar notificación**.
 
 ## Modelo de datos en Firestore
 
@@ -94,9 +104,11 @@ devices/{deviceId}
   - batteryLevel: number
   - isOnline: boolean
   - lastSeen: timestamp
-  - location: { lat, lng }
+  - location: { lat, lng }   # 0,0 = el bastón nunca tuvo GPS (no hay ubicación)
+  - gpsFix?: boolean         # false = location es la ÚLTIMA posición conocida
   - speed: number
   - bluetoothId?: string
+  - inviteCode?: string      # código para que otro familiar se una al círculo
 
 locations/{deviceId}/history/{auto-id}
   - lat: number
@@ -107,12 +119,14 @@ alerts/{alertId}
   - deviceId: string
   - timestamp: timestamp
   - location: { lat, lng }
-  - photoUrl: string  (Firebase Storage)
-  - audioUrl: string  (Firebase Storage)
+  - photoUrl: string  # "data:image/jpeg;base64,..." (la completa el ESP32-CAM)
+  - audioUrl: string  # "data:audio/wav;base64,..." (6 s a 8 kHz; vacío sin micrófono)
   - seen: boolean
   - seenBy?: string[]
   - source?: "device" | "pwa_sos"           # boton fisico del baston vs SOS de la app
-  - locationSource?: "device"|"phone"|"unknown"   # de donde salio `location`
+  - trigger?: "boton" | "caida" | "prueba"  # que la disparo en el baston
+  - locationSource?: "device"|"device_last"|"phone"|"unknown"   # de donde salio `location`
+  - notified?: boolean                      # lo marca /api/notify (evita push repetida)
 
 commands/{deviceId}          # ordenes de la APP -> BASTON (unico camino de ida)
   - ringToken: number        # nonce; el baston actua cuando cambia
@@ -123,9 +137,10 @@ commands/{deviceId}          # ordenes de la APP -> BASTON (unico camino de ida)
 ```
 
 > **Por qué `commands/` es una colección aparte y no un campo de `devices/`:**
-> el heartbeat del ESP32 hace un PATCH **sin `updateMask`** sobre
-> `devices/{deviceId}`, y eso en la REST API de Firestore reemplaza el documento
-> entero. Una orden guardada ahí duraría menos de 10 segundos.
+> el heartbeat del ESP32 reescribe `devices/{deviceId}` cada 10 s. Al principio lo
+> hacía con un PATCH **sin `updateMask`**, que en la REST API de Firestore reemplaza
+> el documento entero (hoy usa `updateMask`, pero la separación sigue siendo más
+> segura). Además así el bastón lee un documento chico.
 
 ## Qué tiene que hacer el ESP32
 
@@ -158,26 +173,23 @@ POST .../documents/locations/DEVICE_ID/history
 { "fields": { "lat": ..., "lng": ..., "timestamp": ... } }
 ```
 
-### Alerta (cuando el usuario presiona el botón físico)
+### Alerta (botón físico o caída)
 
-1. Sacá foto + grabá 15s de audio.
-2. Subí ambos a Firebase Storage en `alerts/{deviceId}/{timestamp}.jpg` y `.mp3`.
-3. Pedí la URL pública con un GET firmado.
-4. Creá el doc:
+1. El **DevKit** crea `alerts/{deviceId}_{timestamp}` con la ubicación, `trigger`,
+   `locationSource` y `photoUrl`/`audioUrl` vacíos.
+2. Le manda `ALERT|<alertId>` al **ESP32-CAM** por un cable (UART).
+3. Llama a `POST /api/notify` (Vercel) con su idToken → push a toda la familia.
+4. El **ESP32-CAM** saca la foto y la sube **enseguida** a `photoUrl` (data URL
+   base64); después graba 6 s de audio en su PSRAM y lo sube a `audioUrl`.
 
 ```
-POST .../documents/alerts
-{ "fields": {
-    "deviceId":  { "stringValue": "DEVICE_ID" },
-    "timestamp": { "timestampValue": "..." },
-    "location":  { "mapValue": { ... } },
-    "photoUrl":  { "stringValue": "https://..." },
-    "audioUrl":  { "stringValue": "https://..." },
-    "seen":      { "booleanValue": false }
-}}
+PATCH .../documents/alerts/ALERT_ID?updateMask.fieldPaths=photoUrl
+{ "fields": { "photoUrl": { "stringValue": "data:image/jpeg;base64,..." } } }
 ```
 
-La PWA tiene un listener real-time y va a mostrar el banner instantáneamente.
+La PWA tiene un listener real-time: el banner aparece al instante y la foto se
+completa sola cuando llega. Límite a tener en cuenta: un doc de Firestore puede
+pesar como mucho 1 MiB (foto ~100 KB + audio ~130 KB en base64 entran de sobra).
 
 ## Encontrar el bastón (modo no vidente)
 
@@ -236,12 +248,13 @@ Limitaciones que conviene tener presentes:
 - **Si el bastón está sin batería o sin WiFi, no suena.** La app lo detecta por
   `isOnline` y lo dice, en vez de dejar al usuario esperando un pitido que no va
   a llegar. En ese caso ofrece la última ubicación conocida.
-- **El poll bloquea el loop ~1 s** (handshake TLS), igual que el heartbeat.
-  Mientras tanto no se mide obstáculos. `RING_POLL_INTERVAL_MS` es el botón para
-  ajustar ese compromiso; una versión de producción usaría una conexión
-  persistente (MQTT o Firestore Listen) en vez del poll.
+- **El poll ya no traba la detección de obstáculos.** Toda la red del DevKit corre
+  en una tarea propia en el núcleo 0; el loop de sensores del núcleo 1 no espera a
+  Firebase (medido: peor traba 26–68 ms, antes 2,5 s). El costo del poll es solo
+  de red/batería; una versión de producción usaría una conexión persistente (MQTT
+  o Firestore Listen) en vez del poll.
 
-El SOS sigue estando, como acción secundaria con hold-to-confirm de 2 s, pero
+El SOS sigue estando, como acción secundaria con hold-to-confirm de 3 s, pero
 ahora manda la ubicación del **teléfono** (`navigator.geolocation`) y marca en
 la alerta de dónde salió, para que la familia no salga a buscar al lugar
 equivocado.
@@ -254,14 +267,10 @@ Esto reduce el consumo de la cuota gratuita de Firestore.
 
 ## Multi-cuidador
 
-Varios familiares pueden ver el mismo bastón. Para autorizar a otro usuario:
-
-1. El dueño obtiene el `uid` del nuevo cuidador (cuando este se registra).
-2. Lo agrega al array `caregiverUids` del documento `devices/{deviceId}`
-   (manualmente desde la consola por ahora — falta UI de invitación).
-3. Le pasa el `deviceId` para que lo ingrese en la pantalla de pairing.
-
-> **TODO sugerido (futuro):** UI de invitación con códigos QR/link mágico.
+Varios familiares pueden ver el mismo bastón. En **Mi cuenta → Mis círculos**, el
+dueño ve el **código de invitación** de 6 letras (lo puede copiar o regenerar); el
+otro familiar entra en **Unirme a otro círculo** y lo pega. Queda agregado a
+`caregiverUids` y recibe las alertas y las push.
 
 ## Build y deploy
 
@@ -278,7 +287,7 @@ Acordate de configurar las variables de entorno en el panel del hosting.
 - **Bluetooth**: la Web Bluetooth API solo funciona en Chrome/Edge (Android + desktop).
   Safari/iOS no la soporta — por eso hay un fallback de "ID manual". Para la demo
   recomiendo usar Chrome en Android.
-- **Notificaciones push**: implementadas con la Web Notifications API (locales).
-  Si querés FCM real (push aún con la app cerrada), necesitás un backend (Cloud
-  Functions) que escuche cambios y envíe vía Admin SDK.
+- **Notificaciones push**: FCM real (llegan con la app cerrada) sin Cloud Functions:
+  el que crea la alerta (el DevKit o la PWA) llama a `/api/notify` en Vercel, que
+  usa firebase-admin. Necesita `FIREBASE_SERVICE_ACCOUNT` cargada en Vercel.
 - **Iconos PWA**: ver `public/icons/README.md` para generarlos a partir de `icon.svg`.
