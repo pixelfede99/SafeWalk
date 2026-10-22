@@ -19,10 +19,12 @@ export function CircleSwitcher({ uid, deviceIds, activeDeviceId }: Props) {
   const [switching, setSwitching] = useState<string | null>(null);
   const now = useNow();
 
+  // Se relee al abrir: el punto de "en línea" depende de lastSeen, y con la
+  // lectura de cuando se montó la barra, a los 35 s todos aparecían desconectados.
   useEffect(() => {
     if (deviceIds.length === 0) return;
     getDevices(deviceIds).then(setDevices);
-  }, [deviceIds]);
+  }, [deviceIds, open]);
 
   // Si solo tiene un círculo, no hace falta el switcher
   if (deviceIds.length <= 1) return null;
