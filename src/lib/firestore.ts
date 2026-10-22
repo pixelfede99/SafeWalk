@@ -258,15 +258,18 @@ export function listenTodayHistory(
   startOfDay.setHours(0, 0, 0, 0);
   const startTs = Timestamp.fromDate(startOfDay);
 
+  // Los ÚLTIMOS 2000 (desc) y después se dan vuelta. Con "asc + limit" venían los
+  // primeros 2000 del día: a un punto cada 30 s, pasadas ~16 h los puntos nuevos
+  // quedaban afuera y el recorrido del mapa se congelaba.
   const q = query(
     collection(db, "locations", deviceId, "history"),
     where("timestamp", ">=", startTs),
-    orderBy("timestamp", "asc"),
+    orderBy("timestamp", "desc"),
     limit(2000)
   );
 
   return onSnapshot(q, (snap) => {
-    const points: LocationPoint[] = snap.docs.map((d) => d.data() as LocationPoint);
+    const points: LocationPoint[] = snap.docs.map((d) => d.data() as LocationPoint).reverse();
     cb(points);
   });
 }
