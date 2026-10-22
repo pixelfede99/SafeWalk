@@ -116,6 +116,18 @@ prueba completa (al final de esta sección).
 - Pantalla no vidente: si el bastón **no confirma** el "sonar" en 20 s, la voz lo dice
   (antes venía silencio). Y el SOS sin ninguna ubicación ya no dice "se mandó la última
   del bastón".
+- **Bug: emparejar un bastón que ya tenía dueño le robaba las alertas al dueño.** Si otro
+  familiar usaba "Vincular un bastón nuevo" en vez del código, pasaba a ser el dueño, se
+  borraban los cuidadores y el dueño original dejaba de recibir las push sin enterarse.
+  Ahora el segundo queda como cuidador.
+- **Bug: el dueño que eliminaba el bastón seguía recibiendo sus alertas.** Ahora el bastón
+  pasa al primer cuidador (o queda sin dueño).
+- **Bug: al cerrar sesión, el celular seguía recibiendo las push** de esa cuenta (el token
+  quedaba registrado). Ahora se da de baja al salir.
+- **Bug: el recorrido del día se congelaba pasadas ~16 h** (traía los primeros 2000
+  puntos en vez de los últimos).
+- Un usuario con el rol equivocado ya no ve un instante la pantalla del otro rol antes de
+  ser redirigido; un bastón recién emparejado no muestra "batería 100 %" inventada.
 
 **CAM — compila, NO probada (la CAM sigue con brownout):**
 - **Audio sin SD y sin Storage:** se graba en la PSRAM (6 s a 8 kHz, ~128 KB en base64)
