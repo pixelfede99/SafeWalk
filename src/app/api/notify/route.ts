@@ -29,15 +29,18 @@ const DEAD_TOKEN_ERRORS = new Set([
 // Texto según qué disparó la alerta. Una caída y un botón no son lo mismo para
 // quien recibe el aviso: la caída puede significar que la persona no puede hablar.
 function alertBody(alert: FirebaseFirestore.DocumentData, deviceName: string): string {
-  if (alert.source === "pwa_sos") return `Pidieron ayuda desde la app de ${deviceName}.`;
-  switch (alert.trigger) {
-    case "caida":
-      return `Se detectó una CAÍDA en ${deviceName}.`;
-    case "prueba":
-      return `Alerta de PRUEBA de ${deviceName} (no es una emergencia real).`;
-    default:
-      return `Apretaron el botón de emergencia de ${deviceName}.`;
-  }
+  let text: string;
+  if (alert.source === "pwa_sos") text = `Pidieron ayuda desde la app de ${deviceName}.`;
+  else if (alert.trigger === "caida") text = `Se detectó una CAÍDA en ${deviceName}.`;
+  else if (alert.trigger === "prueba") text = `Alerta de PRUEBA de ${deviceName} (no es una emergencia real).`;
+  else text = `Apretaron el botón de emergencia de ${deviceName}.`;
+
+  // Que la familia sepa desde la notificación si va a encontrar un mapa o no.
+  const loc = alert.location as { lat?: number; lng?: number } | undefined;
+  const noLocation = alert.locationSource === "unknown" || !loc || (loc.lat === 0 && loc.lng === 0);
+  if (noLocation) text += " Sin ubicación GPS.";
+  else if (alert.locationSource === "device_last") text += " Con la última ubicación conocida.";
+  return text;
 }
 
 export async function GET() {
