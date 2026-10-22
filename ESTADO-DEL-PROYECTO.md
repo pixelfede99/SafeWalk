@@ -50,8 +50,9 @@ Production ni en Preview (los dos deploys dicen `Falta la variable FIREBASE_SERV
 **Publicar**. Sin esto, "encontrar el bastón" no anda (el bastón recibe 403 al leer
 `commands/`; ahora reintenta cada 60 s y lo avisa por el serial).
 
-**3. Revisar y mergear el pull request** de la rama `claude/nucleos-ubicacion-real`
-(lo de abajo). Al mergear, Vercel publica la web nueva sola.
+**3. Abrir, revisar y mergear el pull request** de la rama `claude/nucleos-ubicacion-real`
+(lo de abajo): https://github.com/pixelfede99/SafeWalk/compare/main...claude/nucleos-ubicacion-real?expand=1
+(Claude no pudo abrirlo: no hay `gh` instalado.) Al mergear, Vercel publica la web nueva sola.
 
 **4. Alimentación de la CAM (el bloqueante de hardware).** Ver
 [`firmware/ALIMENTACION-CAM.md`](firmware/ALIMENTACION-CAM.md): checklist en orden, qué
