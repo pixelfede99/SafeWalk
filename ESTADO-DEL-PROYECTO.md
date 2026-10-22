@@ -74,20 +74,30 @@ prueba completa (al final de esta sección).
   trababa el loop hasta 2,5 s: caminando son ~3,5 m **sin detectar obstáculos**. Ahora el
   loop (sensores, motor, buzzer, botón) no se traba nunca, ni durante una emergencia.
   31 minutos seguidos sin reinicios y con memoria estable.
-- **La emergencia avisa si se envió:** 1 pitido largo = enviada; **5 cortitos = falló,
-  volver a apretar** (la persona no puede mirar una pantalla). Mientras una alerta se
-  está mandando, otra presión se ignora (no 5 alertas iguales por apretar en el apuro).
+- **La emergencia avisa si se envió:** 1 pitido largo = enviada; **5 cortitos = todavía
+  no salió** (la persona no puede mirar una pantalla). Mientras una alerta se está
+  mandando, otra presión se ignora (no 5 alertas iguales por apretar en el apuro).
+- **Si la alerta falla, se reintenta sola** cada 10 s durante 10 min, con la hora y la
+  ubicación del momento (importa en una caída: la persona puede no poder volver a
+  apretar). Probado con un corte de WiFi simulado: `FALLO (intento 1)` → vuelve el
+  WiFi → `creada OK (intento 2)`. Volver a apretar la reintenta ya, sin duplicarla.
+- **La foto no se pisa:** el aviso a la CAM sale al instante (foto del momento) y el
+  DevKit escribe la alerta con `updateMask`; antes un PATCH sin máscara podía borrar
+  la foto si la CAM llegaba primero.
+- **Vigilancia del WiFi:** 30 s sin conexión fuerza la reconexión (DevKit y CAM).
 - **Ubicación honesta:** sin GPS el bastón mandaba **el Obelisco** como si fuera real.
   Ahora manda 0,0 + `locationSource` (`device` / `device_last` / `unknown`) en la alerta y
   `gpsFix` en el heartbeat. El historial solo guarda puntos con fix actual.
 - **La alerta guarda qué la disparó:** `trigger` = `boton` / `caida` / `prueba`.
 - **Bug: re-login.** Si fallaba el refresco del token (ej. corte de WiFi justo en ese
   momento) no había plan B: a la hora el bastón dejaba de escribir en Firebase hasta
-  reiniciarlo, sin avisar. Ahora vuelve a loguearse solo.
+  reiniciarlo, sin avisar. Ahora vuelve a loguearse solo. **Verificado en la placa:** a
+  los 61 min de uptime (el token original ya había vencido) el heartbeat sigue en 200.
 - **Bug: respuestas cortadas.** Si Firestore tardaba más de 1 s en contestar, la
   respuesta entera (headers incluidos) terminaba como "cuerpo" con código 0. Ahora espera.
 - **Comandos por USB** (monitor serie 115200): `SOS` (emergencia de prueba), `STATUS`
-  (WiFi, Firebase, GPS, batería, trabas del loop, memoria), `RING` (pitido 5 s), `AYUDA`.
+  (WiFi, Firebase, GPS, batería, alerta pendiente, trabas del loop, memoria), `RING`
+  (pitido 5 s), `SINWIFI` (corta el WiFi 40 s para probar), `AYUDA`.
 
 **Web — compila, build de producción OK, revisada en el navegador con datos de prueba:**
 - El mapa ya **no dibuja el bastón en el Obelisco** cuando no hay ubicación: cartel
@@ -98,6 +108,11 @@ prueba completa (al final de esta sección).
   modo prueba `{test:true}`. En **Mi cuenta → Notificaciones**, botón para probar la push.
 - Descargas con la extensión real (.wav, no .mp3). Historial: 30 alertas, no 100 (cada
   una pesa ~250 KB con foto y audio en base64).
+- **Bug: la primera alerta de un bastón no mostraba el banner** ni la notificación
+  local (solo contaba como nueva si ya había otra antes). Justo el caso de una demo.
+- Pantalla no vidente: si el bastón **no confirma** el "sonar" en 20 s, la voz lo dice
+  (antes venía silencio). Y el SOS sin ninguna ubicación ya no dice "se mandó la última
+  del bastón".
 
 **CAM — compila, NO probada (la CAM sigue con brownout):**
 - **Audio sin SD y sin Storage:** se graba en la PSRAM (6 s a 8 kHz, ~128 KB en base64)
@@ -105,7 +120,8 @@ prueba completa (al final de esta sección).
   baja). Sin micrófono no sube nada.
 - **La foto sale primero**, en su propio envío: la familia la ve en segundos. Antes
   esperaba los 15 s de grabación del audio.
-- El `alertId` que llega por el cable se valida antes de usarlo.
+- El `alertId` que llega por el cable se valida antes de usarlo. Foto y audio con 3
+  intentos cada uno (la foto del momento no se puede volver a sacar).
 - Nuevo env **`esp32cam_nobod`** para diagnosticar el brownout (ver ALIMENTACION-CAM.md).
 
 ### Estado de las placas al terminar la sesión 5
@@ -114,8 +130,9 @@ prueba completa (al final de esta sección).
 - **CAM:** tiene el firmware del 20/10 (WiFi antes que la cámara + potencia baja), **no**
   el del audio nuevo. Sigue reiniciándose por brownout al prender el WiFi, también
   alimentada desde el VIN del DevKit (3 fuentes distintas, mismo resultado).
-- **Alertas de prueba en el dashboard** (sin foto): `…2026-10-20T23-07-37Z` y
-  `…2026-10-22T10-38-45Z`. Se pueden borrar desde la consola de Firestore.
+- **Alertas de prueba en el dashboard** (sin foto, todas de `SAFEWALK-DEVICE-001`):
+  `…2026-10-20T23-07-37Z`, `…2026-10-22T10-38-45Z`, `…2026-10-22T11-41-25Z` y
+  `…2026-10-22T11-42-11Z` (hora UTC). Se pueden borrar desde la consola de Firestore.
 
 ### La prueba completa (cuando estén resueltos la alimentación y la variable de Vercel)
 1. Flashear la CAM: IO0→GND + RST, **TX del adaptador → U0R** y GPIO13 del DevKit
