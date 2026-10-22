@@ -39,7 +39,8 @@
 //    4) DevKit llama a /api/notify (Vercel) -> push a la familia
 //    5) buzzer confirma: 1 pitido largo = enviada; 5 cortitos = todavía NO se
 //       pudo (el usuario no puede ver una pantalla). Si falló, se reintenta sola
-//       cada 10 s durante 10 min, y volver a apretar la reintenta ya.
+//       cada 10 s durante 10 min, y volver a apretar la reintenta ya. Si en
+//       10 min no salió: 3 pitidos largos.
 //    6) el ESP32-CAM sube la foto y el audio a photoUrl/audioUrl (data URL
 //       base64, sin Storage porque el plan de Firebase es el gratuito).
 //
@@ -48,6 +49,7 @@
 //    STATUS  -> WiFi, Firebase, GPS, batería, memoria, trabas del loop
 //    RING    -> hace sonar el patrón de "encontrar el bastón" 5 s
 //    SINWIFI -> corta el WiFi 40 s (para probar reintentos y reconexión)
+//    SINHORA -> pone el reloj en 1970 (para probar la hora del header Date)
 //    AYUDA   -> lista de comandos
 //
 //  >>> AJUSTAR <<< credenciales en include/secrets.h y deviceId en config.h.
@@ -59,6 +61,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <atomic>
+#include <sys/time.h>
 #include "config.h"
 #include "FirebaseRest.h"
 
@@ -76,7 +79,7 @@ static const char* const REASON_NAMES[] = { "boton", "caida", "prueba" };
 
 static QueueHandle_t      g_emergencyQ = nullptr;   // loop -> red
 static std::atomic<bool>  g_emergencyInFlight{false};
-static std::atomic<int>   g_alertResult{0};         // red -> loop: 1 enviada, 2 falló
+static std::atomic<int>   g_alertResult{0};         // red -> loop: 1 enviada, 2 reintentando, 3 no salió
 
 // ---------------- GPS compartido (loop escribe, red lee) ----------------
 // Última ubicación conocida. Arranca en 0,0 = "sin ubicación" (la app lo entiende
@@ -402,7 +405,9 @@ static const uint32_t ALERT_RETRY_MAX_MS = 10UL * 60000UL; // durante 10 min
 struct PendingAlert {
   bool     active = false;
   String   alertId;
-  String   fields;
+  String   fields;          // todo menos timestamp (ver tryDeliverPending)
+  uint32_t eventMs = 0;     // millis() del momento del evento
+  time_t   eventEpoch = 0;  // hora real del evento; 0 = el reloj todavía no tenía hora
   uint32_t firstTryMs = 0;
   uint32_t nextTryMs = 0;
   int      tries = 0;
@@ -417,8 +422,21 @@ static const char* const ALERT_MASK = "deviceId,timestamp,location,locationSourc
 
 static void tryDeliverPending() {
   g_pending.tries++;
-  const bool ok = fb.firestoreUpdate(String(FS_ALERTS_COLL) + "/" + g_pending.alertId,
-                                     g_pending.fields, ALERT_MASK);
+
+  // La hora del evento. Si cuando se apretó el reloj no tenía hora (NTP no
+  // respondió), se calcula ahora restando cuánto pasó desde el evento. Mandar
+  // 1970 haría que la alerta no aparezca como la última en la app (sin banner).
+  if (!g_pending.eventEpoch && fb.ensureClock())
+    g_pending.eventEpoch = time(nullptr) - (time_t)((millis() - g_pending.eventMs) / 1000);
+
+  bool ok = false;
+  if (g_pending.eventEpoch) {
+    const String fields = g_pending.fields + ",\"timestamp\":" +
+                          FirebaseRest::fTimestamp(FirebaseRest::isoTimestamp(g_pending.eventEpoch));
+    ok = fb.firestoreUpdate(String(FS_ALERTS_COLL) + "/" + g_pending.alertId, fields, ALERT_MASK);
+  } else {
+    Serial.println("Alerta: todavia sin hora (sin red), se reintenta");
+  }
   Serial.printf("Alerta %s: %s (intento %d)\n", g_pending.alertId.c_str(),
                 ok ? "creada OK" : "FALLO", g_pending.tries);
   if (ok) {
@@ -429,8 +447,9 @@ static void tryDeliverPending() {
   }
   if (g_pending.tries == 1) g_alertResult = 2;   // 5 cortitos: "todavía no salió"
   if (millis() - g_pending.firstTryMs >= ALERT_RETRY_MAX_MS) {
-    Serial.println("Alerta: se agotaron los reintentos");
+    Serial.println("Alerta: se agotaron los reintentos, NO se pudo enviar");
     g_pending.active = false;
+    g_alertResult = 3;                      // 3 largos: no salió (volver a apretar)
     return;
   }
   g_pending.nextTryMs = millis() + ALERT_RETRY_MS;
@@ -447,7 +466,13 @@ static void sendEmergency(uint8_t reason) {
   }
 
   const GpsSnap g = gpsSnapshot();
-  String alertId = String(SAFEWALK_DEVICE_ID) + "_" + FirebaseRest::isoTimestampNow();
+  // ID: bastón + hora + 4 hex al azar. El sufijo evita que dos alertas en el mismo
+  // segundo (o dos arranques sin hora, todas "1970...") se pisen entre sí.
+  char suffix[6];
+  snprintf(suffix, sizeof(suffix), "_%04x", (unsigned)(esp_random() & 0xFFFF));
+  const bool hadClock = FirebaseRest::clockValid();
+  String alertId = String(SAFEWALK_DEVICE_ID) + "_" +
+                   (hadClock ? FirebaseRest::isoTimestampNow() : String("sinhora")) + suffix;
   alertId.replace(":", "-");                // ':' no es válido en ids/paths
 
   // 1) La CAM saca la foto YA, en el momento del evento (no cuando el DevKit
@@ -461,12 +486,13 @@ static void sendEmergency(uint8_t reason) {
   g_pending.alertId = alertId;
   g_pending.fields =
       "\"deviceId\":"  + FirebaseRest::fStr(SAFEWALK_DEVICE_ID) +
-      ",\"timestamp\":" + FirebaseRest::fTimestamp(FirebaseRest::isoTimestampNow()) +
       ",\"location\":"  + FirebaseRest::fGeo(g.lat, g.lng) +
       ",\"locationSource\":" + FirebaseRest::fStr(locationSource(g)) +
       ",\"source\":"    + FirebaseRest::fStr("device") +
       ",\"trigger\":"   + FirebaseRest::fStr(REASON_NAMES[reason]) +
       ",\"seen\":"      + FirebaseRest::fBool(false);
+  g_pending.eventMs = millis();
+  g_pending.eventEpoch = hadClock ? time(nullptr) : 0;
   g_pending.firstTryMs = millis();
   tryDeliverPending();
   g_emergencyInFlight = false;
@@ -512,6 +538,8 @@ static bool wifiWatchdog() {
 }
 
 static void sendHeartbeat() {
+  // Sin hora, lastSeen saldría de 1970 y la app vería el bastón "Offline" igual.
+  if (!fb.ensureClock()) return;
   const GpsSnap g = gpsSnapshot();
   const bool fresh = gpsFresh(g);
   const uint32_t mv = readBatteryMv();
@@ -535,6 +563,7 @@ static void sendHeartbeat() {
 }
 
 static void sendHistoryPoint(const GpsSnap& g) {
+  if (!FirebaseRest::clockValid()) return;   // un punto de 1970 no sirve de nada
   String fields =
       "\"lat\":"       + FirebaseRest::fDouble(g.lat) +
       ",\"lng\":"      + FirebaseRest::fDouble(g.lng) +
@@ -689,9 +718,14 @@ static void handleSerialCommand() {
       Serial.println("[RING] prueba local 5 s");
     } else if (cmd == "SINWIFI") {
       g_wifiTestOff = true;                 // lo ejecuta netTask
+    } else if (cmd == "SINHORA") {
+      // Simula que NTP no respondió: el próximo request toma la hora del header Date.
+      timeval tv = { 1000, 0 };
+      settimeofday(&tv, nullptr);
+      Serial.println("[PRUEBA] reloj puesto en 1970");
     } else if (cmd.length()) {
       Serial.println("Comandos: SOS (emergencia de prueba), STATUS, RING (pitido 5 s), "
-                     "SINWIFI (corta el WiFi 40 s, para probar), AYUDA");
+                     "SINWIFI (corta el WiFi 40 s), SINHORA (reloj en 1970), AYUDA");
     }
   }
 }
@@ -771,7 +805,8 @@ void loop() {
   // --- Resultado de la última alerta: avisar con el buzzer ---
   const int result = g_alertResult.exchange(0);
   if (result == 1) buzzerPattern(1, 400, 0);        // enviada
-  else if (result == 2) buzzerPattern(5, 80, 80);   // NO se pudo enviar: volver a apretar
+  else if (result == 2) buzzerPattern(5, 80, 80);   // todavía no salió (se reintenta sola)
+  else if (result == 3) buzzerPattern(3, 600, 300); // no salió en 10 min: volver a apretar
 
   updateBuzzer();
 

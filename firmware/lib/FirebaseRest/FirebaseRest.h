@@ -28,6 +28,12 @@ class FirebaseRest {
   // Sincroniza la hora por NTP (necesaria para timestamps y TLS). Bloqueante.
   bool syncTime(uint32_t timeoutMs = 10000);
 
+  // true si el reloj tiene hora real (no 1970).
+  static bool clockValid();
+  // Si NTP no puso la hora, la toma del header Date de una request a Google
+  // (también se toma sola de cualquier respuesta). true si quedó con hora.
+  bool ensureClock();
+
   // Login con email/password. Guarda idToken/refreshToken. true si OK.
   bool signIn(const char* email, const char* password);
 
@@ -66,6 +72,7 @@ class FirebaseRest {
   // Firestore REEMPLAZA el documento entero (los campos que no mandás se
   // borran). Para tocar solo algunos campos usá firestoreUpdate().
   static String isoTimestampNow();          // "2026-06-15T14:42:44Z"
+  static String isoTimestamp(time_t t);     // idem, para una hora dada
   static String fStr(const String& s);      // {"stringValue":"..."}
   static String fDouble(double v);          // {"doubleValue": v}
   static String fInt(long v);               // {"integerValue":"v"}

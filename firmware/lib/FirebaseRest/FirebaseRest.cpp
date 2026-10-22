@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <sys/time.h>   // settimeofday (hora del header Date)
 
 // Hosts de Google
 static const char* HOST_IDTK   = "identitytoolkit.googleapis.com";
@@ -17,6 +18,37 @@ static const char* HOST_ST     = "firebasestorage.googleapis.com";
 // Ruta relativa explícita: al compilarse como librería (lib/), el include_dir
 // del proyecto (include/) no está en el CPPPATH, así que apuntamos directo.
 #include "../../include/config.h"   // FB_API_KEY, FB_PROJECT_ID, FB_STORAGE_BUCKET
+
+// ----------------------------------------------------------------------------
+//  Hora de respaldo: el header "Date" de las respuestas de Google.
+//
+//  Sin hora válida (NTP no respondió: arranque sin WiFi, o redes que bloquean
+//  NTP, como muchas de colegios), el reloj queda en 1970: el heartbeat manda un
+//  lastSeen de 1970 (la app ve el bastón "Offline" para siempre) y las alertas
+//  quedan fechadas en 1970 (no aparecen como la última). Toda respuesta HTTPS de
+//  Google trae "Date: Thu, 22 Oct 2026 11:09:31 GMT", así que la usamos para
+//  poner el reloj cuando NTP no lo hizo. Precisión de 1 s: alcanza y sobra.
+// ----------------------------------------------------------------------------
+bool FirebaseRest::clockValid() { return time(nullptr) >= 1700000000; }
+
+static void clockFromDateHeader(const String& line) {
+  if (FirebaseRest::clockValid()) return;          // NTP ya la puso: no tocamos
+  int d, y, H, M, S;
+  char mon[4] = {0};
+  // line = "Date: Thu, 22 Oct 2026 11:09:31 GMT\r"
+  if (sscanf(line.c_str() + 5, " %*3s, %d %3s %d %d:%d:%d", &d, mon, &y, &H, &M, &S) != 6) return;
+  static const char MONTHS[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  const char* p = strstr(MONTHS, mon);
+  if (!p || (p - MONTHS) % 3) return;
+  struct tm t = {};
+  t.tm_mday = d; t.tm_mon = (p - MONTHS) / 3; t.tm_year = y - 1900;
+  t.tm_hour = H; t.tm_min = M; t.tm_sec = S;
+  const time_t epoch = mktime(&t);                  // TZ = UTC (configTime(0, 0, ...))
+  if (epoch < 1700000000) return;
+  timeval tv = { epoch, 0 };
+  settimeofday(&tv, nullptr);
+  Serial.println("[FB] hora tomada del header Date (NTP no respondio)");
+}
 
 // ----------------------------------------------------------------------------
 //  Lector de respuesta HTTP (status + headers + body).
@@ -53,6 +85,7 @@ static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& out
     String low = line; low.toLowerCase();
     if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") >= 0) chunked = true;
     else if (low.startsWith("content-length:")) contentLength = line.substring(15).toInt();
+    else if (low.startsWith("date:")) clockFromDateHeader(line);
   }
 
   // --- body ---
@@ -119,10 +152,20 @@ bool FirebaseRest::syncTime(uint32_t timeoutMs) {
   return now >= 1700000000;
 }
 
-String FirebaseRest::isoTimestampNow() {
-  time_t now = time(nullptr);
+// Si el reloj no tiene hora, hace una request barata (sin auth) solo para leer el
+// header Date. Devuelve true si al final hay hora válida.
+bool FirebaseRest::ensureClock() {
+  if (clockValid()) return true;
+  String resp; int code;
+  httpJson(HOST_FS, "/", "GET", "", resp, code, false);   // 404 con header Date
+  return clockValid();
+}
+
+String FirebaseRest::isoTimestampNow() { return isoTimestamp(time(nullptr)); }
+
+String FirebaseRest::isoTimestamp(time_t t) {
   struct tm tmv;
-  gmtime_r(&now, &tmv);
+  gmtime_r(&t, &tmv);
   char buf[32];
   strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tmv);
   return String(buf);
