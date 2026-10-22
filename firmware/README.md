@@ -6,7 +6,7 @@ Firmware del bastón inteligente **SafeWalk** (capstone de electrónica). Proyec
 | Placa | Rol |
 |---|---|
 | **ESP32 DevKit v1** | Cerebro: GPS, HC-SR04 (obstáculos), MPU-6050 (caídas), motor, buzzer, botón, batería, WiFi/Firebase |
-| **ESP32-CAM AI-Thinker** | Cámara OV2640 + micrófono INMP441 (audio) → MicroSD → Firebase Storage |
+| **ESP32-CAM AI-Thinker** | Cámara OV2640 + micrófono INMP441 (audio) → PSRAM → Firestore (base64) |
 
 La página web (raíz del repo) **solo lee** de Firestore. El bastón **escribe**
 directo vía la REST API de Firebase.
@@ -35,24 +35,52 @@ directo vía la REST API de Firebase.
    │                          │                                │                        │
    │  HC-SR04 → motor (vibra) │                                │  OV2640 → foto         │
    │  MPU-6050 → caída (INT)  │                                │  INMP441 → audio .wav  │
-   │  Botón → emergencia      │                                │   → MicroSD (1-bit)    │
+   │  Botón → emergencia      │                                │   → PSRAM (sin SD)     │
    │  GPS → ubicación         │                                │                        │
    │  Buzzer → feedback       │                                │                        │
-   │  WiFi → Firestore        │   ambas suben a Firebase ───►  │  WiFi → Storage        │
+   │  WiFi → Firestore        │   ambas suben a Firebase ───►  │  WiFi → Firestore      │
    └──────────────────────────┘                                └────────────────────────┘
                  │                                                         │
-                 └──────────────►   Firebase (Firestore + Storage)  ◄──────┘
+                 └──────────────►   Firebase (solo Firestore)       ◄──────┘
 ```
 
-**Reparto de responsabilidades (decisión de diseño):** cada placa sube a Storage
-**el archivo que tiene físicamente**, por su propio WiFi, así el enlace entre
-placas **solo transporta el `alertId` (texto)**, nunca los bytes (la foto pesa
-decenas de KB y el audio ~480 KB; pasar eso por UART sería lentísimo).
+**Reparto de responsabilidades (decisión de diseño):** cada placa sube **lo que
+tiene físicamente**, por su propio WiFi, así el enlace entre placas **solo
+transporta el `alertId` (texto)**, nunca los bytes (pasar una foto por UART sería
+lentísimo).
 
 - El **DevKit** crea el documento `alerts/{alertId}` con la ubicación (la alerta
-  aparece **al instante** en el dashboard) y manda el `alertId` al ESP32-CAM.
-- El **ESP32-CAM** saca la foto, graba el audio a su MicroSD, sube **ambos** a
-  Storage y completa `photoUrl` + `audioUrl` en ese mismo documento (PATCH).
+  aparece **al instante** en el dashboard), manda el `alertId` al ESP32-CAM y
+  llama a `/api/notify` (Vercel) para la push a la familia.
+- El **ESP32-CAM** saca la foto y la sube **enseguida** a `photoUrl`; después graba
+  6 s de audio en su PSRAM y lo sube a `audioUrl`. Los dos van como *data URL*
+  base64 **dentro del doc de Firestore**: el plan gratis de Firebase no tiene
+  Storage (tope: 1 MiB por doc; foto ~100 KB + audio ~130 KB).
+
+### DevKit: dos núcleos
+
+Cada request HTTPS a Firebase tarda 1–2 s (handshake TLS). Con todo en el `loop()`,
+medido en el bastón real, el loop se trababa hasta **2,5 s** y quedaba bloqueado el
+**25 %** del tiempo: caminando, hasta 3,5 m **sin detectar obstáculos**. Por eso:
+
+- **Núcleo 1 (`loop`)**: sensores, motor, buzzer (no bloqueante), botón, GPS. Nunca
+  toca la red. Medido: peor traba **26–68 ms**, 0 % bloqueado.
+- **Núcleo 0 (`netTask`)**: heartbeat, historial, poll de `commands/`, alertas y push.
+- Se comunican por una **cola de emergencias**, una copia del GPS con mutex y
+  variables atómicas (pedido de "sonar", resultado de la alerta). Ningún objeto que
+  no sea thread-safe (`FirebaseRest`, `TinyGPS`) se usa desde los dos lados.
+
+Al terminar una alerta el buzzer avisa: **1 pitido largo = enviada; 5 cortitos =
+falló** (volver a apretar). Mientras una alerta se manda, otra presión se ignora.
+
+### Comandos por USB (DevKit, monitor serie a 115200)
+
+| Comando | Qué hace |
+|---|---|
+| `SOS` | Dispara la emergencia igual que el botón (`trigger: "prueba"`) |
+| `STATUS` | WiFi, Firebase, GPS, batería, MPU, trabas del loop, memoria |
+| `RING` | Hace sonar el patrón de "encontrar el bastón" 5 s |
+| `AYUDA` | Lista de comandos |
 
 ---
 
@@ -82,7 +110,7 @@ decenas de KB y el audio ~480 KB; pasar eso por UART sería lentísimo).
 
 | Función | GPIO | Notas |
 |---|---|---|
-| MicroSD CLK / CMD / D0 | 14 / 15 / 2 | **SD_MMC modo 1-BIT** |
+| MicroSD CLK / CMD / D0 | 14 / 15 / 2 | **SD_MMC modo 1-BIT** (solo `test_audio_sd`; la alerta no usa SD) |
 | INMP441 BCLK (SCK) | 12 | liberado en SD 1-bit |
 | INMP441 WS (LRCK) | 4 | comparte el flash LED (parpadea al grabar) |
 | INMP441 DATA (SD) | 13 | liberado en SD 1-bit |
@@ -116,9 +144,9 @@ INMP441: `VDD`→3.3V, `GND`→GND, `L/R`→GND (canal izquierdo).
 
 | Mensaje | Dirección | Cuándo | Acción del receptor |
 |---|---|---|---|
-| `ALERT\|<alertId>\n` | DevKit → CAM | botón o caída | foto + audio 15s → Storage; PATCH `alerts/{alertId}` con `photoUrl`/`audioUrl` |
+| `ALERT\|<alertId>\n` | DevKit → CAM | botón, caída o `SOS` | foto → PATCH `photoUrl`; audio 6 s → PATCH `audioUrl` (data URLs en `alerts/{alertId}`) |
 
-No hay hilo de retorno: el ESP32-CAM "responde" escribiendo las URLs en Firestore
+No hay hilo de retorno: el ESP32-CAM "responde" escribiendo la foto y el audio en Firestore
 (el dashboard las ve en tiempo real). El `alertId` lo genera el DevKit como
 `{deviceId}_{timestampISO}` (con `:` reemplazados por `-`).
 
@@ -151,7 +179,11 @@ pio run -e test_hcsr04 -t upload -t monitor
 Lista de `env` de test: `test_buzzer`, `test_button`, `test_motor`,
 `test_hcsr04`, `test_mpu6050`, `test_gps`, `test_battery`,
 `test_wifi_firestore`, `test_trigger_tx` (DevKit) · `test_camera`,
-`test_audio_sd`, `test_trigger_rx` (ESP32-CAM).
+`test_audio_sd`, `test_trigger_rx` (ESP32-CAM). Diagnóstico: `esp32cam_nobod`
+(CAM con el detector de brownout apagado, ver [ALIMENTACION-CAM.md](ALIMENTACION-CAM.md)).
+
+> La CAM con el adaptador CP2102 se flashea mejor con **esptool directo**: comando
+> en [FLASHEO.md](FLASHEO.md).
 
 ---
 
@@ -162,8 +194,8 @@ HC-SR04 + MPU-6050 + motor + buzzer + botón (y WiFi/Firebase, que Wokwi resuelv
 por su gateway).
 
 **No simulable en Wokwi** (probar en hardware real): cámara OV2640, audio I2S/SD
-del ESP32-CAM, el GPS NEO-6M y el INT de caída del MPU. En la simulación el
-firmware usa una ubicación por defecto (Obelisco) hasta tener fix real.
+del ESP32-CAM, el GPS NEO-6M y el INT de caída del MPU. Sin GPS el firmware
+manda la ubicación 0,0 con `gpsFix: false` y la app muestra "sin señal GPS".
 
 ```bash
 pio run -e devkit        # genera el .bin/.elf que usa wokwi.toml
@@ -194,6 +226,7 @@ Orden recomendado para ir armando y probando el hardware:
   **`.gitignore`** y **no se versiona**. Usá `include/secrets.h.example` como plantilla.
 - El firmware se autentica en Firebase con un **usuario email/password dedicado**
   del dispositivo (`signInWithPassword`) y usa el `idToken` como `Bearer` para
-  escribir en Firestore/Storage (las reglas del repo exigen usuario autenticado).
+  escribir en Firestore (las reglas del repo exigen usuario autenticado). Si el
+  refresco del token falla, vuelve a loguearse solo.
 - ⚠️ Por simplicidad de capstone, `FirebaseRest` usa `WiFiClientSecure::setInsecure()`
   (no valida el certificado del server). Para producción, fijá el root CA de Google.
