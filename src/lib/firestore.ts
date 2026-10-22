@@ -96,7 +96,7 @@ export async function createDevice(
       name,
       ownerUid,
       caregiverUids: [],
-      batteryLevel: 100,
+      batteryLevel: -1, // "sin medir" hasta el primer heartbeat (antes decía 100 %)
       isOnline: false,
       lastSeen: serverTimestamp(),
       location: { lat: 0, lng: 0 },
