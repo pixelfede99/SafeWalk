@@ -80,7 +80,11 @@ falló** (volver a apretar). Mientras una alerta se manda, otra presión se igno
 | `SOS` | Dispara la emergencia igual que el botón (`trigger: "prueba"`) |
 | `STATUS` | WiFi, Firebase, GPS, batería, MPU, trabas del loop, memoria |
 | `RING` | Hace sonar el patrón de "encontrar el bastón" 5 s |
+| `SINWIFI` | Corta el WiFi 40 s, para probar el reintento de alertas y la reconexión |
 | `AYUDA` | Lista de comandos |
+
+Si una alerta no se puede crear (sin WiFi, Firebase caído), queda **pendiente** y se
+reintenta sola cada 10 s durante 10 min con la hora y ubicación del momento.
 
 ---
 
