@@ -4,7 +4,7 @@ import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import type { DeviceDoc } from "@/types";
 import { BatteryIcon } from "./BatteryIcon";
-import { isDeviceOnline } from "@/lib/device-status";
+import { hasBatteryReading, isDeviceOnline } from "@/lib/device-status";
 import { useNow } from "@/hooks/useNow";
 
 export function DevicePanel({ device }: { device: DeviceDoc | null }) {
@@ -44,7 +44,9 @@ export function DevicePanel({ device }: { device: DeviceDoc | null }) {
           value={
             <div className="flex items-center gap-2">
               <BatteryIcon level={device.batteryLevel} />
-              <span>{device.batteryLevel}%</span>
+              <span>
+                {hasBatteryReading(device.batteryLevel) ? `${device.batteryLevel}%` : "sin medir"}
+              </span>
             </div>
           }
         />

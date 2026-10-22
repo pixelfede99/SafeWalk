@@ -12,6 +12,15 @@
 import type { DeviceDoc } from "@/types";
 
 /**
+ * `batteryLevel` negativo = el bastón no puede medir la batería (el divisor de
+ * GPIO35 está desconectado). Antes llegaba como 0 %, y la familia lo leía como
+ * "se está por apagar".
+ */
+export function hasBatteryReading(level: number | null | undefined): level is number {
+  return typeof level === "number" && level >= 0;
+}
+
+/**
  * Cuánto silencio toleramos antes de darlo por desconectado.
  *
  * El firmware manda heartbeat cada HEARTBEAT_INTERVAL_MS (10 s en config.h).

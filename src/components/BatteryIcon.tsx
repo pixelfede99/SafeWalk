@@ -1,4 +1,16 @@
+import { hasBatteryReading } from "@/lib/device-status";
+
 export function BatteryIcon({ level }: { level: number }) {
+  // Sin medición: batería vacía con borde punteado, no una batería en rojo.
+  if (!hasBatteryReading(level)) {
+    return (
+      <svg viewBox="0 0 24 12" width="28" height="14" fill="none" aria-label="Batería sin medir">
+        <rect x="0.5" y="0.5" width="20" height="11" rx="2" stroke="currentColor" strokeOpacity="0.4" strokeDasharray="2 2" />
+        <rect x="21" y="3" width="2.5" height="6" rx="0.5" fill="currentColor" fillOpacity="0.3" />
+      </svg>
+    );
+  }
+
   const clamped = Math.max(0, Math.min(100, level));
   const color = clamped > 50 ? "#10b981" : clamped > 20 ? "#f59e0b" : "#ef4444";
 

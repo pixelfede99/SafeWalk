@@ -68,6 +68,10 @@
 #define BATT_FULL_MV             4200.0f   // 18650 cargada
 #define BATT_EMPTY_MV            3300.0f   // consideramos "vacía" (corte seguro)
 #define BATT_DIVIDER_RATIO          2.0f   // 100k/100k -> Vbat = Vadc * 2
+// Debajo de esto el divisor no está conectado (GPIO35 al aire): una 18650 real
+// con tan poca tensión ya habría apagado al ESP32. Se manda batteryLevel = -1
+// ("sin medir") en vez de un 0 % que la familia leería como "se está apagando".
+#define BATT_UNMEASURED_MV       1500.0f
 
 // ----------------------------------------------------------------------------
 //  PINES — ESP32 DevKit v1 (cerebro principal)

@@ -274,7 +274,9 @@ static uint32_t readBatteryMv() {
   for (int i = 0; i < N; i++) acc += analogReadMilliVolts(PIN_BATTERY);
   return (uint32_t)((acc / (float)N) * BATT_DIVIDER_RATIO);
 }
+// -1 = sin medir (divisor desconectado). Ver BATT_UNMEASURED_MV en config.h.
 static int batteryPercent(uint32_t mv) {
+  if (mv < BATT_UNMEASURED_MV) return -1;
   float pct = (mv - BATT_EMPTY_MV) / (BATT_FULL_MV - BATT_EMPTY_MV) * 100.0f;
   return (int)constrain(pct, 0.0f, 100.0f);
 }
@@ -642,7 +644,11 @@ static void printStatus() {
   Serial.printf("GPS:      %s  sats %u  lat %.6f lng %.6f  (%lu chars recibidos)\n",
                 locationSource(g), (unsigned)gps.satellites.value(),
                 g.lat, g.lng, (unsigned long)gps.charsProcessed());
-  Serial.printf("Bateria:  %d%%  (%lu mV)\n", g_net.batteryPct, (unsigned long)g_net.batteryMv);
+  if (g_net.batteryPct < 0)
+    Serial.printf("Bateria:  SIN MEDIR (%lu mV: divisor de GPIO35 desconectado)\n",
+                  (unsigned long)g_net.batteryMv);
+  else
+    Serial.printf("Bateria:  %d%%  (%lu mV)\n", g_net.batteryPct, (unsigned long)g_net.batteryMv);
   Serial.printf("MPU-6050: %s\n", g_mpuOk ? "OK" : "no detectado (caidas desactivadas)");
   Serial.printf("Ring:     poll cada %lu s\n", (unsigned long)(g_net.pollEveryMs / 1000));
   if (g_pending.active)

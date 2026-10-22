@@ -16,7 +16,7 @@ import {
   stopRing
 } from "@/lib/firestore";
 import { getPhoneLocation } from "@/lib/geolocation";
-import { isDeviceOnline } from "@/lib/device-status";
+import { hasBatteryReading, isDeviceOnline } from "@/lib/device-status";
 import { useNow } from "@/hooks/useNow";
 import type { CommandDoc } from "@/types";
 
@@ -109,7 +109,11 @@ function BlindContent() {
   useEffect(() => {
     // Anuncia el estado al entrar (el lector de pantalla ya lee los aria-label)
     const msg = device
-      ? `Bastón ${online ? "conectado" : "desconectado"}, batería al ${device.batteryLevel} por ciento.`
+      ? `Bastón ${online ? "conectado" : "desconectado"}, ${
+          hasBatteryReading(device.batteryLevel)
+            ? `batería al ${device.batteryLevel} por ciento`
+            : "batería sin medir"
+        }.`
       : "Conectando con el bastón.";
     speak(msg);
   }, [online, device?.batteryLevel]);
@@ -391,7 +395,9 @@ function BlindContent() {
         />
         <StatusRow
           label="Batería"
-          value={`${device?.batteryLevel ?? "—"}%`}
+          value={
+            hasBatteryReading(device?.batteryLevel) ? `${device!.batteryLevel}%` : "Sin medir"
+          }
           color="#fff"
           extra={
             device ? (
