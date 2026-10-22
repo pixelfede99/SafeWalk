@@ -83,7 +83,7 @@ class FirebaseRest {
   String _refreshToken;
   uint32_t _tokenExpiryMs = 0;   // millis() en que vence
   String _email, _password;      // para re-loguear si el refresh falla
-  uint32_t _lastReloginMs = 0;
+  uint32_t _lastRenewTryMs = 0;  // último intento de renovar el token
   int _lastCode = 0;
   int _lastGetErr = 0;
 

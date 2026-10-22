@@ -189,17 +189,26 @@ bool FirebaseRest::signIn(const char* email, const char* password) {
 
 bool FirebaseRest::ensureToken() {
   // Refrescar si faltan menos de 5 min para vencer.
-  if (_idToken.length() && (long)(_tokenExpiryMs - millis()) > 5UL * 60UL * 1000UL)
+  const long left = (long)(_tokenExpiryMs - millis());
+  if (_idToken.length() && left > 5L * 60L * 1000L) return true;
+
+  // Como mucho un intento cada 30 s: cada uno abre TLS y, sin red, puede tardar
+  // varios segundos. Sin este freno, la CAM (que llama a esto en cada vuelta del
+  // loop) se quedaba reintentando sin parar. Mientras tanto, si el token viejo
+  // todavía no venció, se sigue usando.
+  if (_lastRenewTryMs && millis() - _lastRenewTryMs < 30000UL)
+    return _idToken.length() && left > 0;
+  _lastRenewTryMs = millis();
+
+  if (refreshIdToken()) {
+    Serial.println("[FB] token renovado");
     return true;
-  if (refreshIdToken()) return true;
+  }
 
   // Plan B: si el refresh falló (corte de WiFi justo en ese momento, refresh token
   // revocado, etc.), volver a loguear con email/password. Sin esto, a la hora el
   // token vencía y el bastón quedaba sin poder escribir hasta que lo reiniciaran.
-  // No reintentamos en cada llamada: el login también abre TLS y bloquea el loop.
   if (!_email.length()) return false;
-  if (_lastReloginMs && millis() - _lastReloginMs < 30000UL) return false;
-  _lastReloginMs = millis();
   Serial.println("[FB] refresh del token fallo, re-logueando...");
   return signIn(_email.c_str(), _password.c_str());
 }

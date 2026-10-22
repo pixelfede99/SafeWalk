@@ -88,6 +88,19 @@ static bool validAlertId(const String& id) {
   return true;
 }
 
+// Sube un campo (photoUrl / audioUrl) con hasta 3 intentos: la foto del momento
+// de la emergencia no se puede volver a sacar, así que un corte de red de un
+// segundo no puede hacer que se pierda.
+static bool uploadField(const String& docPath, const char* field, const String& value) {
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    if (fb.firestoreUpdate(docPath, String("\"") + field + "\":" + FirebaseRest::fStr(value), field))
+      return true;
+    Serial.printf("[CAM] %s: fallo el intento %d\n", field, attempt);
+    if (attempt < 3) delay(3000);
+  }
+  return false;
+}
+
 // ---------------- Manejo de una alerta ----------------
 //  Foto primero y subida EN EL ACTO: es lo que la familia necesita ver. El audio
 //  se graba después y llega en un segundo PATCH. Antes la foto esperaba los 15 s
@@ -115,7 +128,7 @@ static void handleAlert(const String& alertId) {
     Serial.println("[CAM] Captura de foto fallo");
   }
   if (photoUrl.length()) {
-    bool ok = fb.firestoreUpdate(docPath, "\"photoUrl\":" + FirebaseRest::fStr(photoUrl), "photoUrl");
+    bool ok = uploadField(docPath, "photoUrl", photoUrl);
     Serial.printf("[CAM] Foto subida (%s)\n", ok ? "OK" : "FALLO");
   }
   photoUrl = String();   // liberar antes de grabar
@@ -129,7 +142,7 @@ static void handleAlert(const String& alertId) {
       String audioUrl = toDataUrl("audio/wav", wav, wavLen);
       free(wav);
       if (audioUrl.length()) {
-        bool ok = fb.firestoreUpdate(docPath, "\"audioUrl\":" + FirebaseRest::fStr(audioUrl), "audioUrl");
+        bool ok = uploadField(docPath, "audioUrl", audioUrl);
         Serial.printf("[CAM] Audio subido (%s)\n", ok ? "OK" : "FALLO");
       } else {
         Serial.println("[CAM] Audio: sin memoria para base64");
@@ -178,6 +191,20 @@ void loop() {
       else Serial.printf("[CAM] alertId invalido, ignorado: %s\n", alertId.c_str());
     }
   }
-  fb.ensureToken();   // mantiene el idToken fresco entre alertas
+  // El ESP32 se reconecta solo en la mayoría de los cortes, pero no en todos:
+  // si pasan 30 s sin WiFi, forzamos la reconexión.
+  static uint32_t wifiLostAt = 0;
+  if (WiFi.isConnected()) {
+    wifiLostAt = 0;
+    fb.ensureToken();   // mantiene el idToken fresco entre alertas
+  } else if (!wifiLostAt) {
+    wifiLostAt = millis();
+    Serial.println("[CAM] WiFi desconectado");
+  } else if (millis() - wifiLostAt > 30000UL) {
+    Serial.println("[CAM] 30 s sin WiFi: reintentando");
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    wifiLostAt = millis();
+  }
   delay(10);
 }

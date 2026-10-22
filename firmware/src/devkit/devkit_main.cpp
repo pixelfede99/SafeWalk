@@ -33,20 +33,21 @@
 //
 //  Flujo de EMERGENCIA (botón o caída):
 //    1) buzzer avisa (3 pitidos)
-//    2) DevKit crea alerts/{alertId} con ubicación, qué la disparó (trigger) y de
-//       dónde salió la ubicación (locationSource). photoUrl/audioUrl vacíos.
-//    3) DevKit manda "ALERT|<alertId>" al ESP32-CAM
+//    2) DevKit manda "ALERT|<alertId>" al ESP32-CAM: la foto es del momento
+//    3) DevKit crea alerts/{alertId} con ubicación, qué la disparó (trigger) y de
+//       dónde salió la ubicación (locationSource)
 //    4) DevKit llama a /api/notify (Vercel) -> push a la familia
-//    5) buzzer confirma: 1 pitido largo = enviada; 5 cortitos = NO se pudo
-//       enviar (el usuario no puede ver una pantalla: tiene que saber si
-//       volver a apretar)
-//    6) el ESP32-CAM saca la foto y completa photoUrl (data URL base64, sin
-//       Storage porque el plan de Firebase es el gratuito).
+//    5) buzzer confirma: 1 pitido largo = enviada; 5 cortitos = todavía NO se
+//       pudo (el usuario no puede ver una pantalla). Si falló, se reintenta sola
+//       cada 10 s durante 10 min, y volver a apretar la reintenta ya.
+//    6) el ESP32-CAM sube la foto y el audio a photoUrl/audioUrl (data URL
+//       base64, sin Storage porque el plan de Firebase es el gratuito).
 //
 //  Comandos por el monitor serie (115200), para probar sin tocar el hardware:
 //    SOS     -> dispara la emergencia igual que el botón
 //    STATUS  -> WiFi, Firebase, GPS, batería, memoria, trabas del loop
 //    RING    -> hace sonar el patrón de "encontrar el bastón" 5 s
+//    SINWIFI -> corta el WiFi 40 s (para probar reintentos y reconexión)
 //    AYUDA   -> lista de comandos
 //
 //  >>> AJUSTAR <<< credenciales en include/secrets.h y deviceId en config.h.
@@ -388,34 +389,124 @@ static void notifyFamily(const String& alertId) {
 }
 
 // ---------------- EMERGENCIA (lado red) ----------------
-static void sendEmergency(uint8_t reason) {
-  const GpsSnap g = gpsSnapshot();
+//  Si la alerta no se puede crear (corte de WiFi, Firebase caído), NO se pierde:
+//  queda pendiente y se reintenta sola cada ALERT_RETRY_MS durante
+//  ALERT_RETRY_MAX_MS. Importa sobre todo en una CAÍDA: la persona puede no estar
+//  en condiciones de volver a apretar el botón. El reintento manda el MISMO doc
+//  (misma hora, misma ubicación del momento), así que no se duplica.
+static const uint32_t ALERT_RETRY_MS     = 10000UL;        // cada 10 s
+static const uint32_t ALERT_RETRY_MAX_MS = 10UL * 60000UL; // durante 10 min
 
+struct PendingAlert {
+  bool     active = false;
+  String   alertId;
+  String   fields;
+  uint32_t firstTryMs = 0;
+  uint32_t nextTryMs = 0;
+  int      tries = 0;
+};
+static PendingAlert g_pending;
+
+// Campos que escribe el DevKit. Va con updateMask (y SIN photoUrl/audioUrl) a
+// propósito: si la CAM llegó a subir la foto antes que nosotros (por ejemplo,
+// porque el DevKit estaba reintentando), un PATCH sin máscara reemplazaría el
+// documento entero y la borraría.
+static const char* const ALERT_MASK = "deviceId,timestamp,location,locationSource,source,trigger,seen";
+
+static void tryDeliverPending() {
+  g_pending.tries++;
+  const bool ok = fb.firestoreUpdate(String(FS_ALERTS_COLL) + "/" + g_pending.alertId,
+                                     g_pending.fields, ALERT_MASK);
+  Serial.printf("Alerta %s: %s (intento %d)\n", g_pending.alertId.c_str(),
+                ok ? "creada OK" : "FALLO", g_pending.tries);
+  if (ok) {
+    g_pending.active = false;
+    notifyFamily(g_pending.alertId);        // push a la familia (app cerrada incluida)
+    g_alertResult = 1;                      // 1 pitido largo
+    return;
+  }
+  if (g_pending.tries == 1) g_alertResult = 2;   // 5 cortitos: "todavía no salió"
+  if (millis() - g_pending.firstTryMs >= ALERT_RETRY_MAX_MS) {
+    Serial.println("Alerta: se agotaron los reintentos");
+    g_pending.active = false;
+    return;
+  }
+  g_pending.nextTryMs = millis() + ALERT_RETRY_MS;
+}
+
+static void sendEmergency(uint8_t reason) {
+  // Otra emergencia mientras una sigue pendiente: no se crea otra alerta, se
+  // reintenta la que ya estaba (la persona volvió a apretar = "mandalo ya").
+  if (g_pending.active) {
+    Serial.println("Alerta pendiente: reintento inmediato");
+    tryDeliverPending();
+    g_emergencyInFlight = false;
+    return;
+  }
+
+  const GpsSnap g = gpsSnapshot();
   String alertId = String(SAFEWALK_DEVICE_ID) + "_" + FirebaseRest::isoTimestampNow();
   alertId.replace(":", "-");                // ':' no es válido en ids/paths
 
-  // 1) Crear el doc de alerta con la ubicación (la foto la completa el CAM)
-  String fields =
+  // 1) La CAM saca la foto YA, en el momento del evento (no cuando el DevKit
+  //    consiga red). Si llega a subirla antes que el doc exista, el doc se crea
+  //    con la foto y nuestro PATCH con máscara le suma el resto sin pisarla.
+  CamLink.printf("ALERT|%s\n", alertId.c_str());
+
+  // 2) Crear el doc de alerta con la ubicación del momento
+  g_pending = PendingAlert();
+  g_pending.active = true;
+  g_pending.alertId = alertId;
+  g_pending.fields =
       "\"deviceId\":"  + FirebaseRest::fStr(SAFEWALK_DEVICE_ID) +
       ",\"timestamp\":" + FirebaseRest::fTimestamp(FirebaseRest::isoTimestampNow()) +
       ",\"location\":"  + FirebaseRest::fGeo(g.lat, g.lng) +
       ",\"locationSource\":" + FirebaseRest::fStr(locationSource(g)) +
       ",\"source\":"    + FirebaseRest::fStr("device") +
       ",\"trigger\":"   + FirebaseRest::fStr(REASON_NAMES[reason]) +
-      ",\"photoUrl\":"  + FirebaseRest::fStr("") +
-      ",\"audioUrl\":"  + FirebaseRest::fStr("") +
       ",\"seen\":"      + FirebaseRest::fBool(false);
-  bool ok = fb.firestoreSet(String(FS_ALERTS_COLL) + "/" + alertId, fields);
-  Serial.printf("Alerta creada: %s (%s)\n", alertId.c_str(), ok ? "OK" : "FALLO");
-
-  // 2) Avisar al ESP32-CAM que capture la foto para este alertId
-  CamLink.printf("ALERT|%s\n", alertId.c_str());
-
-  // 3) Push a la familia (llega aunque tengan la app cerrada)
-  if (ok) notifyFamily(alertId);
-
-  g_alertResult = ok ? 1 : 2;               // el loop avisa con el buzzer
+  g_pending.firstTryMs = millis();
+  tryDeliverPending();
   g_emergencyInFlight = false;
+}
+
+// ---------------- WiFi: vigilancia ----------------
+// El ESP32 se reconecta solo en la mayoría de los cortes, pero no en todos. Si
+// pasan 30 s sin WiFi, forzamos una reconexión. Mientras no hay WiFi, no se
+// intentan requests: cada una tardaría en fallar y demoraría una alerta.
+static std::atomic<bool> g_wifiTestOff{false};   // comando SINWIFI (solo pruebas)
+static uint32_t g_wifiTestUntil = 0;
+
+static bool wifiWatchdog() {
+  static bool wasUp = true;
+  static uint32_t lostAt = 0;
+
+  if (g_wifiTestOff.exchange(false)) {
+    Serial.println("[WiFi] PRUEBA: desconectado a propósito por 40 s");
+    g_wifiTestUntil = millis() + 40000UL;
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect();
+    wasUp = false;
+  }
+  if (g_wifiTestUntil) {
+    if ((int32_t)(millis() - g_wifiTestUntil) < 0) return false;
+    g_wifiTestUntil = 0;
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    lostAt = millis();
+  }
+
+  const bool up = WiFi.isConnected();
+  if (!up && wasUp)  { Serial.println("[WiFi] desconectado"); lostAt = millis(); }
+  if (up && !wasUp)  Serial.println("[WiFi] reconectado");
+  wasUp = up;
+  if (!up && millis() - lostAt > 30000UL) {
+    Serial.println("[WiFi] 30 s sin conexion: reintentando");
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    lostAt = millis();
+  }
+  return up;
 }
 
 static void sendHeartbeat() {
@@ -462,7 +553,17 @@ static void netTask(void*) {
       continue;   // si había otra en cola, que salga ya
     }
 
+    // Sin WiFi no tiene sentido intentar nada (ni el reintento de la alerta).
+    if (!wifiWatchdog()) continue;
+
     const uint32_t now = millis();
+
+    // Alerta pendiente (la primera vez falló): reintentar cada 10 s.
+    if (g_pending.active && (int32_t)(now - g_pending.nextTryMs) >= 0) {
+      tryDeliverPending();
+      continue;
+    }
+
     if (first || now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
       lastHeartbeat = now;
       sendHeartbeat();
@@ -544,6 +645,9 @@ static void printStatus() {
   Serial.printf("Bateria:  %d%%  (%lu mV)\n", g_net.batteryPct, (unsigned long)g_net.batteryMv);
   Serial.printf("MPU-6050: %s\n", g_mpuOk ? "OK" : "no detectado (caidas desactivadas)");
   Serial.printf("Ring:     poll cada %lu s\n", (unsigned long)(g_net.pollEveryMs / 1000));
+  if (g_pending.active)
+    Serial.printf("Alerta:   PENDIENTE, %d intentos (reintenta cada %lu s)\n",
+                  g_pending.tries, (unsigned long)(ALERT_RETRY_MS / 1000));
   const uint32_t win = millis() - g_loopWindowStart;
   Serial.printf("Loop:     peor traba %lu ms, trabado %lu%% del tiempo (ultimos %lu s)\n",
                 (unsigned long)g_loopMaxGap,
@@ -577,8 +681,11 @@ static void handleSerialCommand() {
     } else if (cmd == "RING") {
       buzzerRing(5);
       Serial.println("[RING] prueba local 5 s");
+    } else if (cmd == "SINWIFI") {
+      g_wifiTestOff = true;                 // lo ejecuta netTask
     } else if (cmd.length()) {
-      Serial.println("Comandos: SOS (emergencia de prueba), STATUS, RING (pitido 5 s), AYUDA");
+      Serial.println("Comandos: SOS (emergencia de prueba), STATUS, RING (pitido 5 s), "
+                     "SINWIFI (corta el WiFi 40 s, para probar), AYUDA");
     }
   }
 }
