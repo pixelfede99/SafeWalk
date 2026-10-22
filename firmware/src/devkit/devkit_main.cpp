@@ -24,9 +24,9 @@
 //    - resultado de la alerta       red  -> loop (para avisar con el buzzer)
 //
 //  Flujo de ENCONTRAR EL BASTON (la app le pide al baston que suene):
-//    1) la app escribe commands/{deviceId} con un ringToken nuevo + ringSeconds
-//    2) el DevKit lee ese doc cada RING_POLL_INTERVAL_MS (unico camino de
-//       LECTURA del firmware: todo lo demas es escritura)
+//    1) la app escribe devices/{deviceId} con un ringToken nuevo + ringSeconds
+//    2) el DevKit lo recibe en la respuesta del heartbeat (cada 10 s), sin
+//       gastar lecturas de la cuota de Firestore
 //    3) si el token cambio, hace pitar el buzzer en rafagas, sin bloquear el loop
 //    4) escribe ackToken de vuelta para que la app pueda decirle al usuario
 //       que el baston SI recibio la orden (el usuario ciego no puede mirarlo)
@@ -48,6 +48,7 @@
 //    SOS     -> dispara la emergencia igual que el botón
 //    STATUS  -> WiFi, Firebase, GPS, batería, memoria, trabas del loop
 //    RING    -> hace sonar el patrón de "encontrar el bastón" 5 s
+//    RINGTEST-> escribe un pedido de sonar en devices/ como la app (circuito completo)
 //    SINWIFI -> corta el WiFi 40 s (para probar reintentos y reconexión)
 //    SINHORA -> pone el reloj en 1970 (para probar la hora del header Date)
 //    AYUDA   -> lista de comandos
@@ -122,7 +123,6 @@ static const char* locationSource(const GpsSnap& s) {
 struct NetStatus {
   volatile int      lastHttp = 0;
   volatile bool     tokenOk = false;
-  volatile uint32_t pollEveryMs = RING_POLL_INTERVAL_MS;
   volatile int      batteryPct = 0;
   volatile uint32_t batteryMv = 0;
   volatile uint32_t lastHeartbeatOkMs = 0;
@@ -289,7 +289,14 @@ static int batteryPercent(uint32_t mv) {
 // ============================================================================
 
 // ---------------- "Encontrar el bastón" (pedido de la app) -------------------
-//  La app escribe en commands/{deviceId} un `ringToken` y `ringSeconds`.
+//  La app escribe en devices/{deviceId} un `ringToken` y `ringSeconds`, y el
+//  bastón los recibe GRATIS en la respuesta del heartbeat: Firestore contesta el
+//  PATCH con el documento completo. Antes los leía con un GET a commands/ cada
+//  5 s: 17.280 lecturas por día solo por estar prendido, un tercio de la cuota
+//  del plan gratis (50.000/día; si se pasa, Firestore deja de andar, alertas
+//  incluidas). Costo: el pitido arranca en hasta HEARTBEAT_INTERVAL_MS (10 s).
+//  (Antes no se podía usar devices/: el heartbeat lo pisaba entero cada 10 s.
+//  Ahora usa updateMask y los campos de la app quedan intactos.)
 //
 //  El token es un NONCE, no una marca de tiempo: solo miramos si cambió
 //  respecto del último que vimos, nunca lo comparamos contra nuestro reloj ni
@@ -319,43 +326,31 @@ static void ringAck(long long token) {
   char buf[24];
   snprintf(buf, sizeof(buf), "%lld", token);
   String fields = String("\"ackToken\":{\"integerValue\":\"") + buf + "\"}";
-  fb.firestoreUpdate(FS_COMMANDS_DOC, fields, "ackToken");
+  fb.firestoreUpdate(FS_DEVICE_DOC, fields, "ackToken");
 }
 
-// Si Firestore dice 403 es porque las reglas publicadas no incluyen commands/.
-// Reintentar cada 5 s no lo arregla y gasta red, así que espaciamos a 1 minuto
-// hasta que vuelva a andar.
-static const uint32_t RING_POLL_BACKOFF_MS = 60000UL;
-
-static void pollRingCommand() {
-  String json;
-  if (!fb.firestoreGet(FS_COMMANDS_DOC, json)) {      // 404 = todavía no hay órdenes
-    if (fb.lastHttpCode() == 403) {
-      if (g_net.pollEveryMs != RING_POLL_BACKOFF_MS)
-        Serial.println("[RING] Sin permiso para leer commands/ -> falta publicar "
-                       "firestore.rules en Firebase. Reintento cada 60 s.");
-      g_net.pollEveryMs = RING_POLL_BACKOFF_MS;
-    }
-    return;
-  }
-  if (g_net.pollEveryMs != RING_POLL_INTERVAL_MS) Serial.println("[RING] commands/ accesible de nuevo");
-  g_net.pollEveryMs = RING_POLL_INTERVAL_MS;
-
+// Recibe el documento completo de devices/{id} (respuesta del heartbeat).
+static void handleRingFields(const String& deviceDocJson) {
+  // Solo los campos que importan: el doc puede traer bastante más.
+  JsonDocument filter;
+  filter["fields"]["ringToken"] = true;
+  filter["fields"]["ringSeconds"] = true;
   JsonDocument doc;
-  if (deserializeJson(doc, json)) return;
+  if (deserializeJson(doc, deviceDocJson, DeserializationOption::Filter(filter))) return;
 
   const long long token = jsonInt(doc, "ringToken", 0);
-  if (token == 0) return;
 
-  // Primer poll después de bootear: adoptamos el token que haya SIN actuar.
+  // Primera lectura después de bootear: adoptamos el token que haya SIN actuar.
   // Si no, el bastón se pondría a sonar solo cada vez que se reinicia,
-  // repitiendo una orden vieja que ya nadie pidió.
+  // repitiendo una orden vieja que ya nadie pidió. Se marca aunque todavía no
+  // haya ningún token (0): antes, en ese caso, el PRIMER pedido real se
+  // "adoptaba" en silencio y no sonaba.
   if (!g_ringTokenKnown) {
     g_lastRingToken  = token;
     g_ringTokenKnown = true;
     return;
   }
-  if (token == g_lastRingToken) return;   // nada nuevo
+  if (token == 0 || token == g_lastRingToken) return;   // nada nuevo
   g_lastRingToken = token;
 
   long secs = (long)jsonInt(doc, "ringSeconds", 0);
@@ -557,22 +552,40 @@ static void sendHeartbeat() {
   // documento ENTERO en la REST API de Firestore, o sea que este heartbeat
   // le borraba a devices/{id} los campos que solo escribe la app
   // (ownerUid, caregiverUids, name, inviteCode) cada 10 segundos.
+  String deviceDoc;
   if (fb.firestoreUpdate(FS_DEVICE_DOC, fields,
-                         "batteryLevel,isOnline,lastSeen,location,gpsFix,speed"))
+                         "batteryLevel,isOnline,lastSeen,location,gpsFix,speed", &deviceDoc)) {
     g_net.lastHeartbeatOkMs = millis();
+    handleRingFields(deviceDoc);           // ¿la app pidió que suene?
+  }
 }
 
-static void sendHistoryPoint(const GpsSnap& g) {
-  if (!FirebaseRest::clockValid()) return;   // un punto de 1970 no sirve de nada
+// Comando de prueba RINGTEST: escribe un pedido de "sonar" en devices/{id} igual
+// que la app, para probar el circuito completo sin el celular.
+static std::atomic<bool> g_ringTestRequest{false};
+static void writeTestRingRequest() {
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%lu", (unsigned long)esp_random());
+  String fields = String("\"ringToken\":{\"integerValue\":\"") + buf + "\"}" +
+                  ",\"ringSeconds\":{\"integerValue\":\"3\"}";
+  bool ok = fb.firestoreUpdate(FS_DEVICE_DOC, fields, "ringToken,ringSeconds");
+  Serial.printf("[PRUEBA] pedido de sonar escrito en devices/ (%s); llega con el proximo heartbeat\n",
+                ok ? "OK" : "FALLO");
+}
+
+static bool sendHistoryPoint(const GpsSnap& g) {
+  if (!FirebaseRest::clockValid()) return false;   // un punto de 1970 no sirve de nada
   String fields =
       "\"lat\":"       + FirebaseRest::fDouble(g.lat) +
       ",\"lng\":"      + FirebaseRest::fDouble(g.lng) +
       ",\"timestamp\":" + FirebaseRest::fTimestamp(FirebaseRest::isoTimestampNow());
-  fb.firestoreAdd(FS_HISTORY_COLL, fields);
+  return fb.firestoreAdd(FS_HISTORY_COLL, fields);
 }
 
 static void netTask(void*) {
-  uint32_t lastHeartbeat = 0, lastHistory = 0, lastPoll = 0;
+  uint32_t lastHeartbeat = 0, lastHistory = 0;
+  double histLat = 0, histLng = 0;     // último punto guardado en el historial
+  bool histHasPoint = false;
   bool first = true;
   for (;;) {
     // Esperar una emergencia hasta 50 ms: así una alerta sale apenas se aprieta
@@ -600,18 +613,20 @@ static void netTask(void*) {
       sendHeartbeat();
     }
 
-    // Historial solo con fix ACTUAL: repetir la última posición conocida
-    // ensuciaría el recorrido con puntos falsos.
+    // Historial solo con fix ACTUAL (repetir la última posición conocida
+    // ensuciaría el recorrido con puntos falsos) y solo si se movió de verdad
+    // (ver HISTORY_MIN_MOVE_M: cuida la cuota diaria del plan gratis).
     const GpsSnap g = gpsSnapshot();
-    if (gpsFresh(g) && now - lastHistory >= HISTORY_INTERVAL_MS) {
+    if (gpsFresh(g) && now - lastHistory >= HISTORY_INTERVAL_MS &&
+        (!histHasPoint ||
+         TinyGPSPlus::distanceBetween(histLat, histLng, g.lat, g.lng) >= HISTORY_MIN_MOVE_M)) {
       lastHistory = now;
-      sendHistoryPoint(g);
+      if (sendHistoryPoint(g)) {
+        histLat = g.lat; histLng = g.lng; histHasPoint = true;
+      }
     }
 
-    if (first || now - lastPoll >= g_net.pollEveryMs) {
-      lastPoll = now;
-      pollRingCommand();
-    }
+    if (g_ringTestRequest.exchange(false)) writeTestRingRequest();
 
     g_net.lastHttp = fb.lastHttpCode();
     g_net.tokenOk  = fb.idToken().length() > 0;
@@ -679,7 +694,8 @@ static void printStatus() {
   else
     Serial.printf("Bateria:  %d%%  (%lu mV)\n", g_net.batteryPct, (unsigned long)g_net.batteryMv);
   Serial.printf("MPU-6050: %s\n", g_mpuOk ? "OK" : "no detectado (caidas desactivadas)");
-  Serial.printf("Ring:     poll cada %lu s\n", (unsigned long)(g_net.pollEveryMs / 1000));
+  Serial.printf("Ring:     llega con el heartbeat (cada %lu s)\n",
+                (unsigned long)(HEARTBEAT_INTERVAL_MS / 1000));
   if (g_pending.active)
     Serial.printf("Alerta:   PENDIENTE, %d intentos (reintenta cada %lu s)\n",
                   g_pending.tries, (unsigned long)(ALERT_RETRY_MS / 1000));
@@ -716,6 +732,8 @@ static void handleSerialCommand() {
     } else if (cmd == "RING") {
       buzzerRing(5);
       Serial.println("[RING] prueba local 5 s");
+    } else if (cmd == "RINGTEST") {
+      g_ringTestRequest = true;             // lo ejecuta netTask
     } else if (cmd == "SINWIFI") {
       g_wifiTestOff = true;                 // lo ejecuta netTask
     } else if (cmd == "SINHORA") {
@@ -725,7 +743,7 @@ static void handleSerialCommand() {
       Serial.println("[PRUEBA] reloj puesto en 1970");
     } else if (cmd.length()) {
       Serial.println("Comandos: SOS (emergencia de prueba), STATUS, RING (pitido 5 s), "
-                     "SINWIFI (corta el WiFi 40 s), SINHORA (reloj en 1970), AYUDA");
+                     "RINGTEST, SINWIFI (corta el WiFi 40 s), SINHORA (reloj en 1970), AYUDA");
     }
   }
 }

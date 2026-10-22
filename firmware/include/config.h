@@ -26,19 +26,19 @@
 // ----------------------------------------------------------------------------
 #define HEARTBEAT_INTERVAL_MS   10000UL   // refresca devices/{id}: batería, online, ubicación
 #define HISTORY_INTERVAL_MS     30000UL   // agrega punto a locations/{id}/history
+// ...y SOLO si se movió al menos esto desde el último punto. Plan gratis de
+// Firebase: 50.000 lecturas/día, y el dashboard lee el recorrido entero cada vez
+// que se abre. Con un punto cada 30 s aunque el bastón estuviera quieto (hasta
+// 2880 por día), ~25 aperturas agotaban la cuota y Firestore dejaba de andar
+// hasta el día siguiente, alertas incluidas. 20 m también filtra el "temblor"
+// del GPS (5–10 m) estando quieto.
+#define HISTORY_MIN_MOVE_M         20.0
 #define ULTRASONIC_INTERVAL_MS    100UL   // cada cuánto medimos distancia (10 Hz)
 #define AUDIO_RECORD_SECONDS       15     // duración de la grabación de la alerta
 
-// Cada cuánto el bastón le pregunta a Firestore si la app le pidió algo
-// ("hacé sonar el buzzer"). ES UN COMPROMISO, no un número mágico:
-//   - Cada consulta abre una conexión TLS nueva y BLOQUEA el loop ~1 s, igual
-//     que el heartbeat. Mientras tanto NO se mide obstáculos.
-//   - Si lo subís, el bastón tarda más en empezar a sonar (y en parar).
-//   - Si lo bajás, el bastón detecta peor los obstáculos mientras camina.
-// 5 s es el punto en el que la espera todavía se banca sin romper el bastón
-// como ayuda para caminar. Un diseño de producción usaría una conexión
-// persistente (MQTT o Firestore Listen) en vez de este poll.
-#define RING_POLL_INTERVAL_MS    5000UL
+// "Encontrar el bastón": el pedido de la app llega en la respuesta del heartbeat
+// (ver devkit_main.cpp), así que tarda como mucho HEARTBEAT_INTERVAL_MS. Antes era
+// un GET aparte cada 5 s: 17.280 lecturas por día de la cuota gratis de Firestore.
 
 // ----------------------------------------------------------------------------
 //  PARÁMETROS DE FUNCIONAMIENTO (ajustables)
@@ -137,9 +137,6 @@
 #define FS_DEVICE_DOC      "devices/" SAFEWALK_DEVICE_ID
 #define FS_HISTORY_COLL    "locations/" SAFEWALK_DEVICE_ID "/history"
 #define FS_ALERTS_COLL     "alerts"
-// Órdenes de la app al bastón. Va aparte de devices/{id} a propósito: ese doc
-// lo reescribe el heartbeat cada 10 s y se llevaría puesta la orden.
-#define FS_COMMANDS_DOC    "commands/" SAFEWALK_DEVICE_ID
 // Path de los archivos en Storage: alerts/{deviceId}/{alertId}.jpg | .wav
 #define ST_ALERT_PREFIX    "alerts/" SAFEWALK_DEVICE_ID "/"
 

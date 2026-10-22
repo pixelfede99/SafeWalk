@@ -36,6 +36,26 @@ export interface DeviceDoc {
   speed: number;
   bluetoothId?: string;
   inviteCode?: string;
+
+  // ---- "Encontrar el bastón" ----
+  // Los escribe la app y el bastón los recibe en la respuesta de su heartbeat
+  // (sin gastar lecturas de la cuota de Firestore). Antes vivían en una colección
+  // aparte, commands/{deviceId}, que el bastón leía con un GET cada 5 s.
+  /**
+   * Cambia en cada pedido (Date.now()). Es un nonce: el firmware NO lo compara
+   * por orden, solo mira si cambió; así anda aunque el reloj del celular esté mal.
+   */
+  ringToken?: number;
+  /** Segundos que tiene que sonar. 0 = parar. El firmware lo limita por las suyas. */
+  ringSeconds?: number;
+  ringRequestedBy?: string;
+  ringRequestedAt?: Timestamp;
+  /**
+   * Eco que escribe el bastón con el `ringToken` que efectivamente ejecutó.
+   * Es la única confirmación real de que la orden llegó: sin esto la app le
+   * estaría diciendo "está sonando" a alguien que no puede verificarlo.
+   */
+  ackToken?: number;
 }
 
 export interface LocationPoint {
@@ -66,31 +86,4 @@ export interface AlertDoc {
    *   unknown     -> no hay ubicación (location = 0,0)
    */
   locationSource?: "device" | "device_last" | "phone" | "unknown";
-}
-
-/**
- * Órdenes que la app le manda al bastón (`commands/{deviceId}`).
- *
- * Va en una colección aparte de `devices/{deviceId}` a propósito: ese doc lo
- * pisa el heartbeat del ESP32 cada 10 s, y además así el bastón lee un
- * documento chico en vez del estado completo.
- *
- * `ringToken` es un nonce (Date.now()): el firmware NO lo compara por orden,
- * solo mira si cambió respecto del último que vio. Eso hace que la función
- * ande aunque el reloj del celular esté mal.
- */
-export interface CommandDoc {
-  deviceId: string;
-  /** Cambia en cada pedido. El bastón actúa cuando ve un valor distinto al anterior. */
-  ringToken: number;
-  /** Segundos que tiene que sonar. 0 = parar. El firmware lo limita por las suyas. */
-  ringSeconds: number;
-  requestedBy: string;
-  updatedAt: Timestamp;
-  /**
-   * Eco que escribe el bastón con el `ringToken` que efectivamente ejecutó.
-   * Es la única confirmación real de que la orden llegó: sin esto la app le
-   * estaría diciendo "está sonando" a alguien que no puede verificarlo.
-   */
-  ackToken?: number;
 }

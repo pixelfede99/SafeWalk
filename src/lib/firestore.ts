@@ -18,7 +18,7 @@ import {
   type Unsubscribe
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint, CommandDoc } from "@/types";
+import type { UserDoc, UserRole, DeviceDoc, AlertDoc, LocationPoint } from "@/types";
 
 // Genera un código de invitación de 6 chars (sin caracteres ambiguos)
 export function generateInviteCode(): string {
@@ -226,7 +226,7 @@ export async function createSosAlert(
   }
 }
 
-// ----------------- COMMANDS (órdenes de la app al bastón) -----------------
+// ----------------- "ENCONTRAR EL BASTÓN" (orden de la app al bastón) -----------------
 
 /** Tope de segundos que pedimos por vez. El firmware también lo limita. */
 export const RING_SECONDS = 30;
@@ -234,11 +234,14 @@ export const RING_SECONDS = 30;
 /**
  * Hace sonar el buzzer del bastón para poder encontrarlo de oído.
  *
- * Escribimos en `commands/{deviceId}` y no en `devices/{deviceId}` porque ese
- * último lo reescribe el heartbeat del ESP32 cada 10 s.
+ * Se escribe en `devices/{deviceId}`: el bastón lo recibe en la respuesta de su
+ * heartbeat (cada 10 s) sin gastar lecturas. Antes iba en `commands/{deviceId}`
+ * y el bastón lo leía con un GET cada 5 s: 17.280 lecturas por día de la cuota
+ * gratis de Firestore, solo por estar prendido. (Antes no se podía usar
+ * `devices/` porque el heartbeat pisaba el doc entero; ahora usa updateMask.)
  *
  * `ringToken` es un nonce, no una marca de tiempo a comparar: el firmware solo
- * chequea si cambió respecto del último que leyó. Así la función anda igual
+ * chequea si cambió respecto del último que vio. Así la función anda igual
  * aunque el reloj del celular esté desfasado.
  */
 export async function ringDevice(
@@ -247,30 +250,20 @@ export async function ringDevice(
   seconds: number = RING_SECONDS
 ): Promise<number> {
   const ringToken = Date.now();
-  await setDoc(
-    doc(db, "commands", deviceId),
-    {
-      deviceId,
-      ringToken,
-      ringSeconds: seconds,
-      requestedBy,
-      updatedAt: serverTimestamp()
-    },
-    { merge: true }
-  );
-  // Lo devolvemos para que la pantalla pueda esperar el `ackToken` del bastón.
+  await updateDoc(doc(db, "devices", deviceId), {
+    ringToken,
+    ringSeconds: seconds,
+    ringRequestedBy: requestedBy,
+    ringRequestedAt: serverTimestamp()
+  });
+  // Lo devolvemos para que la pantalla pueda esperar el `ackToken` del bastón
+  // (que llega en el mismo doc del bastón que ya escucha).
   return ringToken;
 }
 
 /** Corta el pitido antes de que se cumpla el tiempo (mismo camino, con 0 s). */
 export async function stopRing(deviceId: string, requestedBy: string): Promise<number> {
   return ringDevice(deviceId, requestedBy, 0);
-}
-
-export function listenCommand(deviceId: string, cb: (c: CommandDoc | null) => void): Unsubscribe {
-  return onSnapshot(doc(db, "commands", deviceId), (snap) => {
-    cb(snap.exists() ? (snap.data() as CommandDoc) : null);
-  });
 }
 
 /** Listener al doc de un device específico para una sola lectura. */

@@ -10,7 +10,6 @@ import { BatteryIcon } from "@/components/BatteryIcon";
 import {
   RING_SECONDS,
   createSosAlert,
-  listenCommand,
   ringDevice,
   setUserRole,
   stopRing
@@ -18,7 +17,6 @@ import {
 import { getPhoneLocation } from "@/lib/geolocation";
 import { hasBatteryReading, isDeviceOnline } from "@/lib/device-status";
 import { useNow } from "@/hooks/useNow";
-import type { CommandDoc } from "@/types";
 
 /**
  * Cuánto hay que mantener apretado para disparar el SOS.
@@ -35,10 +33,10 @@ const HOLD_FEEDBACK_MS = 600;
 
 /**
  * Cuánto esperar la confirmación del bastón antes de avisar que no llegó. El
- * bastón revisa las órdenes cada 5 s (RING_POLL_INTERVAL_MS) y la confirmación
- * tarda un poco más en volver: 20 s es el doble del peor caso normal.
+ * pedido le llega con el heartbeat (cada 10 s) y la confirmación tarda un poco
+ * más en volver: 25 s es más del doble del peor caso normal.
  */
-const RING_ACK_TIMEOUT_MS = 20_000;
+const RING_ACK_TIMEOUT_MS = 25_000;
 
 export default function BlindPage() {
   return (
@@ -66,7 +64,6 @@ function BlindContent() {
 
   // --- Estado del "hacer sonar el bastón" ---
   const [ringToken, setRingToken] = useState<number | null>(null); // el token que pedimos
-  const [command, setCommand] = useState<CommandDoc | null>(null); // lo que ve el bastón
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [ringBusy, setRingBusy] = useState(false);
 
@@ -118,14 +115,10 @@ function BlindContent() {
     speak(msg);
   }, [online, device?.batteryLevel]);
 
-  // Escuchamos el doc de órdenes para saber si el bastón confirmó (ackToken).
-  useEffect(() => {
-    if (!deviceId) return;
-    return listenCommand(deviceId, setCommand);
-  }, [deviceId]);
-
   // El bastón confirmó el pedido que hicimos -> avisamos que SÍ está sonando.
-  const acked = ringToken !== null && command?.ackToken === ringToken;
+  // La confirmación (ackToken) la escribe el bastón en su propio doc, que ya
+  // escuchamos con useDevice: no hace falta otro listener.
+  const acked = ringToken !== null && device?.ackToken === ringToken;
   useEffect(() => {
     if (!acked) return;
     announce("El bastón está sonando. Seguí el pitido.");

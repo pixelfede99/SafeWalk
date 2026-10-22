@@ -302,7 +302,7 @@ bool FirebaseRest::firestoreSet(const String& docPath, const String& fieldsJson)
 }
 
 bool FirebaseRest::firestoreUpdate(const String& docPath, const String& fieldsJson,
-                                   const String& updateMaskFields) {
+                                   const String& updateMaskFields, String* outDocJson) {
   ensureToken();
   // updateMask: ?updateMask.fieldPaths=foo&updateMask.fieldPaths=bar
   String mask;
@@ -321,6 +321,9 @@ bool FirebaseRest::firestoreUpdate(const String& docPath, const String& fieldsJs
   String resp; int code;
   bool ok = httpJson(HOST_FS, path, "PATCH", body, resp, code, true);
   if (!ok) Serial.printf("[FB] firestoreUpdate (%d): %s\n", code, resp.c_str());
+  // Firestore contesta el PATCH con el documento COMPLETO (también los campos que
+  // no tocamos): el heartbeat lo usa para leer órdenes de la app sin gastar lecturas.
+  if (ok && outDocJson) *outDocJson = resp;
   return ok;
 }
 
@@ -340,9 +343,9 @@ bool FirebaseRest::firestoreAdd(const String& collectionPath, const String& fiel
 //  vuelta, que es lo que permite que la app le pida algo al bastón (ej. "sonar
 //  para que te encuentre").
 //
-//  Costo a tener en cuenta: cada llamada abre una conexión TLS nueva, igual que
-//  el heartbeat, y eso BLOQUEA el loop ~1 s. Por eso el poll no es cada 100 ms
-//  sino cada RING_POLL_INTERVAL_MS (ver config.h).
+//  Costo a tener en cuenta: cada llamada abre una conexión TLS nueva (~1 s) y
+//  cuenta como una lectura de la cuota diaria de Firestore. El DevKit ya no la
+//  usa para las órdenes de la app: le llegan en la respuesta del heartbeat.
 // ----------------------------------------------------------------------------
 bool FirebaseRest::firestoreGet(const String& docPath, String& outJson) {
   ensureToken();

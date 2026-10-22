@@ -32,8 +32,9 @@ service cloud.firestore {
       allow read, write: if isSignedIn();
     }
 
-    // Órdenes de la app al bastón (ej. "hacé sonar el buzzer").
-    // Colección aparte de devices/ porque ese doc lo reescribe el heartbeat.
+    // YA NO SE USA (sesión 5): el pedido de "sonar" ahora va en devices/{id} y el
+    // bastón lo recibe con la respuesta del heartbeat, sin gastar lecturas. Se
+    // deja la regla para no romper versiones viejas de la app.
     match /commands/{deviceId} {
       allow read, write: if isSignedIn();
     }

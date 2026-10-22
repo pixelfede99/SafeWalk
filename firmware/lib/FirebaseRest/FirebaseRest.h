@@ -45,8 +45,10 @@ class FirebaseRest {
   bool firestoreSet(const String& docPath, const String& fieldsJson);
 
   // UPDATE parcial: solo toca los campos en updateMask (coma-separados).
+  // Si outDocJson no es null, deja ahí el documento COMPLETO que devuelve Firestore
+  // (formato {"name":..., "fields":{...}}), incluidos los campos que no se tocaron.
   bool firestoreUpdate(const String& docPath, const String& fieldsJson,
-                       const String& updateMaskFields);
+                       const String& updateMaskFields, String* outDocJson = nullptr);
 
   // ADD: crea doc con id automático dentro de una colección.
   bool firestoreAdd(const String& collectionPath, const String& fieldsJson);
