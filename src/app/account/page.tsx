@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { TopBar } from "@/components/TopBar";
+import { PushTestCard } from "@/components/PushTestCard";
 import { signOut } from "@/lib/auth";
 import {
   getDevices,
@@ -237,6 +238,13 @@ function AccountContent() {
             )}
           </div>
         </Card>
+
+        {/* Notificaciones push */}
+        {user && (
+          <Card title="Notificaciones">
+            <PushTestCard uid={user.uid} />
+          </Card>
+        )}
 
         {/* Sesión */}
         <Card title="Sesión">

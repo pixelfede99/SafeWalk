@@ -13,6 +13,13 @@ import { markAlertSeen } from "@/lib/firestore";
 import { requestNotificationPermission, showLocalNotification } from "@/lib/notifications";
 import { registerPush } from "@/lib/push";
 import { seedDemoAlert } from "@/lib/demo";
+import {
+  DEFAULT_MAP_CENTER,
+  TONE_CLASS,
+  alertTriggerLabel,
+  deviceLocationNote,
+  hasRealLocation
+} from "@/lib/location";
 
 const Map = dynamic(() => import("@/components/Map"), { ssr: false });
 
@@ -43,16 +50,18 @@ function DashboardContent() {
   useEffect(() => {
     if (hasNew && alert) {
       showLocalNotification("¡Alerta de SafeWalk!", {
-        body: "Tu familiar presionó el botón de emergencia.",
+        body: `${alertTriggerLabel(alert)}: revisá la app.`,
         tag: alert.id,
         requireInteraction: true
       });
     }
   }, [hasNew, alert]);
 
-  const center = device?.location?.lat
-    ? device.location
-    : { lat: -34.6037, lng: -58.3816 }; // Buenos Aires por defecto
+  // Sin ubicación real (0,0) centramos en Buenos Aires pero SIN marcador: antes
+  // el bastón aparecía en el Obelisco como si estuviera ahí.
+  const hasLocation = hasRealLocation(device?.location);
+  const center = hasLocation ? device!.location : DEFAULT_MAP_CENTER;
+  const locationNote = deviceLocationNote(device);
 
   const onDismissAlert = async () => {
     if (alert && user) {
@@ -75,7 +84,23 @@ function DashboardContent() {
 
       <main className="flex-1 flex flex-col max-w-5xl w-full mx-auto px-4 py-4 space-y-4">
         <div className="relative h-[55vh] w-full rounded-2xl overflow-hidden border border-white/5">
-          <Map center={center} trail={trail} />
+          <Map
+            center={center}
+            trail={trail}
+            showMarker={hasLocation}
+            staleMarker={device?.gpsFix === false}
+            zoom={hasLocation ? 16 : 11}
+          />
+          {/* left-14: a la derecha de los botones de zoom de Leaflet, que si no
+              quedan tapados en el celular. */}
+          {locationNote && (
+            <div
+              role="status"
+              className={`absolute top-3 left-14 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-full max-w-md text-center bg-bg-card/95 border border-white/10 rounded-xl px-3 py-2 text-xs z-[400] animate-fade-in ${TONE_CLASS[locationNote.tone]}`}
+            >
+              {locationNote.text}
+            </div>
+          )}
           {paused && (
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-card/95 border border-white/10 rounded-full px-4 py-2 text-xs text-slate-300 z-[400] animate-fade-in">
               Actualizaciones pausadas (pestaña en segundo plano)

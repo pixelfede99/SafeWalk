@@ -3,11 +3,10 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
-import dynamic from "next/dynamic";
 import type { AlertDoc } from "@/types";
 import { downloadFile } from "@/lib/storage";
-
-const Map = dynamic(() => import("./Map"), { ssr: false });
+import { TONE_CLASS, alertLocationNote, alertTriggerLabel, mediaExtension } from "@/lib/location";
+import { AlertLocationMap } from "./AlertLocationMap";
 
 export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: () => void }) {
   const [downloading, setDownloading] = useState<"photo" | "audio" | null>(null);
@@ -18,7 +17,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
     setDownloading(which);
     try {
       const url = which === "photo" ? alert.photoUrl : alert.audioUrl;
-      const ext = which === "photo" ? "jpg" : "mp3";
+      const ext = mediaExtension(url, which === "photo" ? "jpg" : "mp3");
       const ts = format(dt, "yyyyMMdd-HHmmss");
       await downloadFile(url, `safewalk-${which}-${ts}.${ext}`);
     } catch (e) {
@@ -36,7 +35,7 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
             <svg viewBox="0 0 24 24" className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
-            <span className="font-bold text-white uppercase tracking-wide">Alerta de emergencia</span>
+            <span className="font-bold text-white uppercase tracking-wide">{alertTriggerLabel(alert)}</span>
           </div>
           <button onClick={onDismiss} className="text-white/80 hover:text-white transition-transform duration-150 motion-safe:active:scale-90" aria-label="Cerrar alerta">
             <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2.5}>
@@ -48,9 +47,10 @@ export function AlertBanner({ alert, onDismiss }: { alert: AlertDoc; onDismiss: 
         <div className="p-4 space-y-4">
           <p className="text-sm text-slate-400">{when}</p>
 
-          <div className="rounded-xl overflow-hidden h-48 sm:h-56">
-            <Map center={alert.location} alertLocation={alert.location} zoom={17} />
-          </div>
+          <AlertLocationMap alert={alert} heightClass="h-48 sm:h-56" />
+          <p className={`text-xs -mt-2 ${TONE_CLASS[alertLocationNote(alert).tone]}`}>
+            {alertLocationNote(alert).text}
+          </p>
 
           <div className="grid sm:grid-cols-2 gap-3">
             {alert.photoUrl && (

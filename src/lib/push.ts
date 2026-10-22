@@ -1,6 +1,6 @@
 // Push real (FCM): registra este navegador para recibir notificaciones aunque la
-// app esté cerrada. El token se guarda en users/{uid}.fcmTokens y la Cloud Function
-// functions/index.js le manda el push cuando se crea una alerta. La notificación la
+// app esté cerrada. El token se guarda en users/{uid}.fcmTokens y la ruta /api/notify
+// (Vercel, gratis) le manda el push cuando se crea una alerta. La notificación la
 // muestra public/sw.js (evento "push").
 
 import { getMessaging, getToken, isSupported } from "firebase/messaging";

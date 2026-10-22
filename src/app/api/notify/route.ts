@@ -4,6 +4,13 @@
 // bastón (dueño + cuidadores), para que llegue aunque la app esté cerrada.
 // La llama el DevKit apenas crea la alerta, y la PWA cuando se usa el SOS de respaldo.
 // Reemplaza a una Cloud Function (que exige plan Blaze): esto corre gratis en Vercel.
+//
+// POST /api/notify  { test: true }  -> push de prueba SOLO a los dispositivos del
+//   usuario que la pide (botón "Probar notificación" de la cuenta). Sirve para
+//   verificar la cadena FCM + service worker sin necesitar el bastón.
+//
+// GET /api/notify -> diagnóstico: si el servidor tiene la cuenta de servicio
+//   cargada. No devuelve ningún secreto, solo sí/no y el motivo.
 
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
@@ -19,6 +26,32 @@ const DEAD_TOKEN_ERRORS = new Set([
   "messaging/invalid-argument"
 ]);
 
+// Texto según qué disparó la alerta. Una caída y un botón no son lo mismo para
+// quien recibe el aviso: la caída puede significar que la persona no puede hablar.
+function alertBody(alert: FirebaseFirestore.DocumentData, deviceName: string): string {
+  if (alert.source === "pwa_sos") return `Pidieron ayuda desde la app de ${deviceName}.`;
+  switch (alert.trigger) {
+    case "caida":
+      return `Se detectó una CAÍDA en ${deviceName}.`;
+    case "prueba":
+      return `Alerta de PRUEBA de ${deviceName} (no es una emergencia real).`;
+    default:
+      return `Apretaron el botón de emergencia de ${deviceName}.`;
+  }
+}
+
+export async function GET() {
+  try {
+    getAdmin();
+    return NextResponse.json({ configured: true });
+  } catch (err) {
+    return NextResponse.json(
+      { configured: false, reason: err instanceof Error ? err.message : "error desconocido" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(req: Request) {
   const authz = req.headers.get("authorization") ?? "";
   const idToken = authz.startsWith("Bearer ") ? authz.slice(7) : "";
@@ -33,13 +66,34 @@ export async function POST(req: Request) {
   }
   const { auth, db, messaging } = admin;
 
+  let callerUid: string;
   try {
-    await auth.verifyIdToken(idToken);
+    callerUid = (await auth.verifyIdToken(idToken)).uid;
   } catch {
     return NextResponse.json({ error: "token inválido" }, { status: 401 });
   }
 
   const body = await req.json().catch(() => ({}));
+
+  // ---- Push de prueba: solo a quien la pidió ----
+  if (body?.test === true) {
+    const snap = await db.doc(`users/${callerUid}`).get();
+    const tokens = ((snap.get("fcmTokens") as string[] | undefined) ?? []).filter(Boolean);
+    if (tokens.length === 0) return NextResponse.json({ sent: 0, reason: "sin-tokens" });
+    const res = await messaging.sendEachForMulticast({
+      tokens,
+      data: {
+        alertId: `test-${Date.now()}`,
+        title: "Prueba de SafeWalk",
+        body: "Si ves esto, las alertas te van a llegar aunque la app esté cerrada.",
+        url: "/account"
+      },
+      webpush: { headers: { Urgency: "high", TTL: "600" } }
+    });
+    await removeDeadTokens(db, res.responses, tokens.map((t) => [t, callerUid]));
+    return NextResponse.json({ sent: res.successCount, failed: res.failureCount });
+  }
+
   const alertId = typeof body?.alertId === "string" ? body.alertId : "";
   if (!alertId) return NextResponse.json({ error: "falta alertId" }, { status: 400 });
 
@@ -65,7 +119,7 @@ export async function POST(req: Request) {
     for (const t of (snap.get("fcmTokens") as string[] | undefined) ?? []) tokenOwner.set(t, snap.id);
   }
   const tokens = [...tokenOwner.keys()];
-  if (tokens.length === 0) return NextResponse.json({ sent: 0 });
+  if (tokens.length === 0) return NextResponse.json({ sent: 0, reason: "sin-tokens" });
 
   const deviceName = dev.name || "el bastón";
   // Mensaje solo-data: el service worker (public/sw.js) arma la notificación.
@@ -74,20 +128,29 @@ export async function POST(req: Request) {
     data: {
       alertId,
       title: "¡Alerta de SafeWalk!",
-      body: `Se activó una alerta de emergencia en ${deviceName}.`,
+      body: alertBody(alert, deviceName),
       url: "/dashboard"
     },
     webpush: { headers: { Urgency: "high", TTL: "3600" } }
   });
 
-  // Limpieza de tokens que FCM rechazó
-  await Promise.all(
-    res.responses.map((r, i) => {
-      if (r.success || !DEAD_TOKEN_ERRORS.has(r.error?.code ?? "")) return null;
-      const t = tokens[i];
-      return db.doc(`users/${tokenOwner.get(t)}`).update({ fcmTokens: FieldValue.arrayRemove(t) });
-    })
-  );
+  await removeDeadTokens(db, res.responses, [...tokenOwner.entries()]);
 
   return NextResponse.json({ sent: res.successCount, failed: res.failureCount });
+}
+
+// Limpieza de tokens que FCM rechazó. `owners` va en el mismo orden que los tokens
+// enviados: [token, uid].
+async function removeDeadTokens(
+  db: FirebaseFirestore.Firestore,
+  responses: { success: boolean; error?: { code?: string } }[],
+  owners: [string, string][]
+) {
+  await Promise.all(
+    responses.map((r, i) => {
+      if (r.success || !DEAD_TOKEN_ERRORS.has(r.error?.code ?? "")) return null;
+      const [token, uid] = owners[i];
+      return db.doc(`users/${uid}`).update({ fcmTokens: FieldValue.arrayRemove(token) });
+    })
+  );
 }

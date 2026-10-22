@@ -290,10 +290,13 @@ export function listenLatestAlert(deviceId: string, cb: (a: AlertDoc | null) => 
   });
 }
 
+// 30 y no 100: sin Storage (plan gratis) la foto y el audio viajan DENTRO del
+// doc de la alerta, ~250 KB cada una. 100 alertas eran ~25 MB de datos móviles
+// cada vez que la familia abría el historial.
 export function listenAlertHistory(
   deviceId: string,
   cb: (alerts: AlertDoc[]) => void,
-  max = 100
+  max = 30
 ): Unsubscribe {
   const q = query(
     collection(db, "alerts"),

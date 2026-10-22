@@ -52,7 +52,7 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-// Push de FCM (lo manda la Cloud Function functions/index.js al crearse una alerta).
+// Push de FCM (lo manda la ruta /api/notify de Vercel al crearse una alerta).
 // Llega aunque la app esté cerrada. Usa tag = alertId, igual que la notificación
 // local del dashboard, así si la app está abierta no aparece duplicada.
 self.addEventListener("push", (event) => {

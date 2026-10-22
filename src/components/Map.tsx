@@ -26,6 +26,25 @@ const caneIcon = L.divIcon({
     </div>`
 });
 
+// Mismo marcador en gris: el GPS perdió señal y es la última posición conocida.
+const staleCaneIcon = L.divIcon({
+  className: "",
+  iconSize: [40, 40],
+  iconAnchor: [20, 20],
+  html: `
+    <div style="
+      width:40px;height:40px;border-radius:50%;
+      background:#64748b;border:3px dashed #fff;
+      box-shadow:0 4px 12px rgba(0,0,0,0.4);
+      display:flex;align-items:center;justify-content:center;opacity:0.85;
+    ">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
+        <path d="M9 3v18M9 3l3 1M6 19l3 2"/>
+        <circle cx="9" cy="5" r="1.5" fill="white"/>
+      </svg>
+    </div>`
+});
+
 const alertIcon = L.divIcon({
   className: "",
   iconSize: [44, 44],
@@ -50,9 +69,21 @@ interface MapProps {
   alertLocation?: GeoPoint | null;
   zoom?: number;
   height?: string;
+  /** false = no hay ubicación real del bastón: el mapa queda sin marcador. */
+  showMarker?: boolean;
+  /** true = la posición es la última conocida (marcador gris). */
+  staleMarker?: boolean;
 }
 
-export default function Map({ center, trail = [], alertLocation = null, zoom = 16, height = "100%" }: MapProps) {
+export default function Map({
+  center,
+  trail = [],
+  alertLocation = null,
+  zoom = 16,
+  height = "100%",
+  showMarker = true,
+  staleMarker = false
+}: MapProps) {
   const polylinePositions = useMemo<[number, number][]>(
     () => trail.map((p) => [p.lat, p.lng]),
     [trail]
@@ -78,7 +109,9 @@ export default function Map({ center, trail = [], alertLocation = null, zoom = 1
         />
       )}
 
-      <Marker position={[center.lat, center.lng]} icon={caneIcon} />
+      {showMarker && (
+        <Marker position={[center.lat, center.lng]} icon={staleMarker ? staleCaneIcon : caneIcon} />
+      )}
 
       {alertLocation && (
         <Marker position={[alertLocation.lat, alertLocation.lng]} icon={alertIcon} />

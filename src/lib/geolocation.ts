@@ -5,6 +5,7 @@
 // caso le da a la familia la posición del bastón, que puede estar en otra casa.
 
 import type { GeoPoint } from "@/types";
+import { hasRealLocation } from "./location";
 
 export interface PhoneLocation {
   location: GeoPoint;
@@ -24,7 +25,9 @@ export async function getPhoneLocation(
   fallback?: GeoPoint | null,
   timeoutMs = 8000
 ): Promise<PhoneLocation> {
-  const fallbackResult: PhoneLocation = fallback
+  // Si el bastón tampoco tiene GPS (0,0), no hay fallback: es "unknown", no
+  // "última ubicación del bastón" con un punto que no existe.
+  const fallbackResult: PhoneLocation = hasRealLocation(fallback)
     ? { location: fallback, source: "device" }
     : { location: { lat: 0, lng: 0 }, source: "unknown" };
 

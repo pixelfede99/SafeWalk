@@ -1,17 +1,22 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import dynamic from "next/dynamic";
 import { format, isSameDay, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
 import { useAuth } from "@/context/AuthContext";
 import { useAlertHistory } from "@/hooks/useAlerts";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { TopBar } from "@/components/TopBar";
+import { AlertLocationMap } from "@/components/AlertLocationMap";
 import { downloadFile } from "@/lib/storage";
+import {
+  TONE_CLASS,
+  alertLocationNote,
+  alertTriggerLabel,
+  hasRealLocation,
+  mediaExtension
+} from "@/lib/location";
 import type { AlertDoc } from "@/types";
-
-const Map = dynamic(() => import("@/components/Map"), { ssr: false });
 
 export default function AlertsPage() {
   return (
@@ -104,9 +109,12 @@ function AlertRow({ alert, onOpen }: { alert: AlertDoc; onOpen: () => void }) {
 
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{when}</p>
-        <p className="text-xs text-slate-500 truncate">
-          {alert.location.lat.toFixed(5)}, {alert.location.lng.toFixed(5)}
-        </p>
+        <p className="text-xs text-slate-300 truncate">{alertTriggerLabel(alert)}</p>
+        {hasRealLocation(alert.location) && (
+          <p className="text-xs text-slate-500 truncate">
+            {alert.location.lat.toFixed(5)}, {alert.location.lng.toFixed(5)}
+          </p>
+        )}
         <LocationSourceBadge alert={alert} />
       </div>
 
@@ -130,16 +138,12 @@ function AlertRow({ alert, onOpen }: { alert: AlertDoc; onOpen: () => void }) {
  * buscar al lugar equivocado.
  */
 function LocationSourceBadge({ alert }: { alert: AlertDoc }) {
-  if (alert.source !== "pwa_sos") return null;
-
-  const [text, color] =
-    alert.locationSource === "phone"
-      ? ["Ubicación del teléfono", "text-emerald-400"]
-      : alert.locationSource === "unknown"
-        ? ["Sin ubicación disponible", "text-red-400"]
-        : ["Última ubicación del bastón (puede no ser la de la persona)", "text-amber-400"];
-
-  return <p className={`text-xs mt-1 ${color}`}>Desde la app · {text}</p>;
+  // Alertas viejas del bastón (sin locationSource) se mostraban sin cartel; si
+  // tienen ubicación real no hay nada nuevo que decir.
+  if (alert.source !== "pwa_sos" && !alert.locationSource && hasRealLocation(alert.location))
+    return null;
+  const note = alertLocationNote(alert);
+  return <p className={`text-xs mt-1 ${TONE_CLASS[note.tone]}`}>{note.text}</p>;
 }
 
 function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => void }) {
@@ -151,7 +155,7 @@ function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => 
     setDownloading(which);
     try {
       const url = which === "photo" ? alert.photoUrl : alert.audioUrl;
-      const ext = which === "photo" ? "jpg" : "mp3";
+      const ext = mediaExtension(url, which === "photo" ? "jpg" : "mp3");
       const ts = format(dt, "yyyyMMdd-HHmmss");
       await downloadFile(url, `safewalk-${which}-${ts}.${ext}`);
     } finally {
@@ -167,7 +171,7 @@ function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => 
       >
         <header className="p-4 border-b border-white/5 flex items-center justify-between">
           <div>
-            <h2 className="font-semibold">Alerta</h2>
+            <h2 className="font-semibold">{alertTriggerLabel(alert)}</h2>
             <p className="text-sm text-slate-400">{when}</p>
           </div>
           <button onClick={onClose} aria-label="Cerrar" className="text-slate-400 hover:text-white">
@@ -178,9 +182,7 @@ function AlertDetailModal({ alert, onClose }: { alert: AlertDoc; onClose: () => 
         </header>
 
         <div className="p-4 space-y-4">
-          <div className="rounded-xl overflow-hidden h-56">
-            <Map center={alert.location} alertLocation={alert.location} zoom={17} />
-          </div>
+          <AlertLocationMap alert={alert} heightClass="h-56" />
           <LocationSourceBadge alert={alert} />
 
           {alert.photoUrl && (
