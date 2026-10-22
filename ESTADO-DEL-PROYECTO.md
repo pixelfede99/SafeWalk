@@ -115,6 +115,15 @@ prueba completa (al final de esta sección).
 - **Historial por distancia:** un punto solo si el bastón se movió 20 m o más (quieto no
   genera puntos). Antes, uno cada 30 s aunque estuviera quieto; el dashboard los lee todos
   cada vez que se abre, y con ~25 aperturas por día se agotaba la cuota.
+- **Obstáculos desde el primer segundo:** la conexión (WiFi, NTP, login) pasó a la tarea
+  de red. Antes `setup()` la esperaba, y prendido sin WiFi el bastón **no detectaba
+  obstáculos durante ~30 s**. Además: **watchdog del loop** (si se colgara más de 5 s, se
+  reinicia solo) y **2 pitidos cortos** la primera vez que conecta ("las alertas van a
+  poder salir"). Tabla de todos los sonidos en `firmware/README.md`.
+- **La push se reintenta** ante timeouts o 502/503/504 de Vercel (hasta 3 veces).
+- **Respuestas livianas:** Firestore devolvía el documento entero en cada PATCH (en una
+  alerta, la foto y el audio en base64 de vuelta: ~250 KB que la CAM bajaba y tiraba, de
+  a un carácter). Ahora se pide solo lo necesario y se lee de a bloques.
 - **Comandos por USB** (monitor serie 115200): `SOS` (emergencia de prueba), `STATUS`
   (WiFi, Firebase, GPS, batería, alerta pendiente, trabas del loop, memoria), `RING`
   (pitido 5 s), `RINGTEST` (pedido de sonar como la app), `SINWIFI` (corta el WiFi 40 s),
@@ -174,7 +183,7 @@ prueba completa (al final de esta sección).
   alimentada desde el VIN del DevKit (3 fuentes distintas, mismo resultado).
 - **Alertas de prueba en el dashboard** (sin foto, todas de `SAFEWALK-DEVICE-001`):
   `…2026-10-20T23-07-37Z`, `…2026-10-22T10-38-45Z`, `…2026-10-22T11-41-25Z`,
-  `…2026-10-22T11-42-11Z` y `…sinhora_aeb9` (hora UTC). Se pueden borrar desde la consola
+  `…2026-10-22T11-42-11Z`, `…sinhora_aeb9` y `…2026-10-22T13-39-46Z_aa24` (hora UTC). Se pueden borrar desde la consola
   de Firestore.
 
 ### La prueba completa (cuando estén resueltos la alimentación y la variable de Vercel)

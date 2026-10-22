@@ -12,7 +12,7 @@
 //
 //  DOS NÚCLEOS, A PROPÓSITO:
 //    - Núcleo 1 (loop): sensores, motor, buzzer, botón, GPS. NUNCA toca la red.
-//    - Núcleo 0 (netTask): todo lo de Firebase / push / poll.
+//    - Núcleo 0 (netTask): la conexión (WiFi, NTP, login) y todo lo de Firebase/push.
 //  Cada request HTTPS bloquea ~1-2 s (handshake TLS). Medido en el bastón real
 //  con todo en el loop: trabas de hasta 2,5 s y el 25 % del tiempo bloqueado, o
 //  sea hasta 3,5 m caminando SIN detectar obstáculos. Separando la red en otra
@@ -43,6 +43,16 @@
 //       10 min no salió: 3 pitidos largos.
 //    6) el ESP32-CAM sube la foto y el audio a photoUrl/audioUrl (data URL
 //       base64, sin Storage porque el plan de Firebase es el gratuito).
+//
+//  QUÉ SIGNIFICA CADA SONIDO (para una persona ciega es la única interfaz):
+//    1 pitido corto al prender ...... sensores listos (obstáculos funcionando)
+//    2 pitidos cortos ............... conectado: las alertas van a poder salir
+//    3 pitidos cortos ............... se disparó una emergencia
+//    1 pitido largo ................. la alerta se envió
+//    5 pitidos muy cortos ........... la alerta todavía no salió (reintenta sola)
+//    3 pitidos largos ............... la alerta NO salió en 10 min: volver a apretar
+//    grupos de 3 con pausa .......... "encontrar el bastón" (lo pidieron desde la app)
+//    (el motor vibra SOLO por obstáculos: más cerca = más fuerte y más rápido)
 //
 //  Comandos por el monitor serie (115200), para probar sin tocar el hardware:
 //    SOS     -> dispara la emergencia igual que el botón
@@ -81,6 +91,10 @@ static const char* const REASON_NAMES[] = { "boton", "caida", "prueba" };
 static QueueHandle_t      g_emergencyQ = nullptr;   // loop -> red
 static std::atomic<bool>  g_emergencyInFlight{false};
 static std::atomic<int>   g_alertResult{0};         // red -> loop: 1 enviada, 2 reintentando, 3 no salió
+// red -> loop: primer heartbeat OK desde que arrancó. El loop avisa con 2 pitidos
+// cortos: la persona sabe que, además de los sensores (1 pitido al prender), las
+// alertas van a poder salir.
+static std::atomic<bool>  g_connectedBeep{false};
 
 // ---------------- GPS compartido (loop escribe, red lee) ----------------
 // Última ubicación conocida. Arranca en 0,0 = "sin ubicación" (la app lo entiende
@@ -370,22 +384,35 @@ static void handleRingFields(const String& deviceDocJson) {
 }
 
 // ---------------- Push a la familia (vía la app en Vercel) ----------------
-static void notifyFamily(const String& alertId) {
+static int notifyOnce(const String& alertId) {
   WiFiClientSecure tls;
   tls.setInsecure();                        // igual que FirebaseRest (sin CA pinning)
   HTTPClient http;
-  http.setTimeout(8000);
-  if (!http.begin(tls, "https://" NOTIFY_HOST "/api/notify")) {
-    Serial.println("Notify: no pude conectar");
-    g_net.lastNotify = -1;
-    return;
-  }
+  http.setTimeout(10000);                   // Vercel en frío puede tardar unos segundos
+  if (!http.begin(tls, "https://" NOTIFY_HOST "/api/notify")) return -1;
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + fb.idToken());
-  int code = http.POST("{\"alertId\":\"" + alertId + "\"}");
+  const int code = http.POST("{\"alertId\":\"" + alertId + "\"}");
   Serial.printf("Notify: HTTP %d %s\n", code, code > 0 ? http.getString().c_str() : "");
-  g_net.lastNotify = code;
   http.end();
+  return code;
+}
+
+// Hasta 3 intentos, pero solo ante fallas que se pueden arreglar solas: sin
+// conexión / timeout (código <= 0) o el gateway de Vercel (502/503/504, por
+// ejemplo en un arranque en frío). Un 500 "servidor sin configurar" o un 401 no
+// se arreglan reintentando. Repetir es seguro: la ruta marca la alerta como
+// notificada y no manda la push dos veces.
+static void notifyFamily(const String& alertId) {
+  int code = 0;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    code = notifyOnce(alertId);
+    const bool retryable = code <= 0 || code == 502 || code == 503 || code == 504;
+    if (!retryable || attempt == 3) break;
+    Serial.printf("Notify: reintento %d en 2 s\n", attempt + 1);
+    delay(2000);                            // netTask: no traba el loop de sensores
+  }
+  g_net.lastNotify = code;
 }
 
 // ---------------- EMERGENCIA (lado red) ----------------
@@ -554,7 +581,9 @@ static void sendHeartbeat() {
   // (ownerUid, caregiverUids, name, inviteCode) cada 10 segundos.
   String deviceDoc;
   if (fb.firestoreUpdate(FS_DEVICE_DOC, fields,
-                         "batteryLevel,isOnline,lastSeen,location,gpsFix,speed", &deviceDoc)) {
+                         "batteryLevel,isOnline,lastSeen,location,gpsFix,speed", &deviceDoc,
+                         "ringToken,ringSeconds")) {   // solo lo que importa de vuelta
+    if (!g_net.lastHeartbeatOkMs) g_connectedBeep = true;   // primera vez conectado
     g_net.lastHeartbeatOkMs = millis();
     handleRingFields(deviceDoc);           // ¿la app pidió que suene?
   }
@@ -583,6 +612,16 @@ static bool sendHistoryPoint(const GpsSnap& g) {
 }
 
 static void netTask(void*) {
+  // Conectividad (bloqueante, pero en esta tarea: el loop de sensores ya corre).
+  // Si algo falla no importa: el WiFi lo reintenta wifiWatchdog(), la hora sale
+  // del header Date si NTP no responde, y el login lo reintenta ensureToken().
+  Serial.print("WiFi... ");
+  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO (reintenta solo)");
+  Serial.print("NTP...  ");
+  Serial.println(fb.syncTime(WiFi.isConnected() ? 10000 : 100) ? "OK" : "FALLO (se toma del header Date)");
+  Serial.print("Login.. ");
+  Serial.println(fb.signIn(FB_DEVICE_EMAIL, FB_DEVICE_PASSWORD) ? "OK" : "FALLO (reintenta solo)");
+
   uint32_t lastHeartbeat = 0, lastHistory = 0;
   double histLat = 0, histLng = 0;     // último punto guardado en el historial
   bool histHasPoint = false;
@@ -780,15 +819,18 @@ void setup() {
 
   mpuInit();
 
-  // Conectividad (bloqueante, pero es solo al arrancar)
-  Serial.print("WiFi... ");  Serial.println(fb.beginWiFi(WIFI_SSID, WIFI_PASSWORD) ? "OK" : "FALLO");
-  Serial.print("NTP...  ");  Serial.println(fb.syncTime() ? "OK" : "FALLO");
-  Serial.print("Login.. ");  Serial.println(fb.signIn(FB_DEVICE_EMAIL, FB_DEVICE_PASSWORD) ? "OK" : "FALLO");
-
-  // Toda la red pasa a su propia tarea en el núcleo 0 (el WiFi del ESP32 ya
-  // vive ahí). 12 KB de stack: el handshake TLS + JSON + Strings lo necesitan.
+  // Toda la red (incluida la conexión: WiFi, NTP, login) va en su propia tarea
+  // en el núcleo 0 (el WiFi del ESP32 ya vive ahí). Así el loop de sensores
+  // arranca YA: antes setup() esperaba el WiFi y el NTP, y prendido sin WiFi el
+  // bastón no detectaba obstáculos durante los primeros ~30 s.
+  // 12 KB de stack: el handshake TLS + JSON + Strings lo necesitan.
   g_emergencyQ = xQueueCreate(4, sizeof(uint8_t));
   xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, nullptr, 0);
+
+  // Watchdog del loop de sensores: si alguna vez se colgara más de 5 s, la placa
+  // se reinicia sola en vez de quedar un bastón mudo. (El loop nunca pasa de
+  // ~70 ms; ver la métrica en STATUS.)
+  enableLoopWDT();
 
   digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW);   // "listo"
 }
@@ -821,6 +863,9 @@ void loop() {
   else if (ring > 0) buzzerRing((uint32_t)ring);
 
   // --- Resultado de la última alerta: avisar con el buzzer ---
+  // --- Primera conexión: 2 pitidos cortos (si no está sonando otra cosa) ---
+  if (!g_beep.active && g_connectedBeep.exchange(false)) buzzerPattern(2, 60, 120);
+
   const int result = g_alertResult.exchange(0);
   if (result == 1) buzzerPattern(1, 400, 0);        // enviada
   else if (result == 2) buzzerPattern(5, 80, 80);   // todavía no salió (se reintenta sola)

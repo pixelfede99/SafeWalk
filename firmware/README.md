@@ -70,8 +70,22 @@ medido en el bastón real, el loop se trababa hasta **2,5 s** y quedaba bloquead
   variables atómicas (pedido de "sonar", resultado de la alerta). Ningún objeto que
   no sea thread-safe (`FirebaseRest`, `TinyGPS`) se usa desde los dos lados.
 
-Al terminar una alerta el buzzer avisa: **1 pitido largo = enviada; 5 cortitos =
-falló** (volver a apretar). Mientras una alerta se manda, otra presión se ignora.
+### Qué significa cada sonido
+
+Para una persona ciega, el buzzer es toda la interfaz del bastón:
+
+| Sonido | Significado |
+|---|---|
+| 1 pitido corto al prender | Sensores listos (la detección de obstáculos ya funciona) |
+| 2 pitidos cortos | Conectado: las alertas van a poder salir |
+| 3 pitidos cortos | Se disparó una emergencia (botón o caída) |
+| 1 pitido largo | La alerta se envió |
+| 5 pitidos muy cortos | La alerta todavía no salió: se reintenta sola cada 10 s |
+| 3 pitidos largos | La alerta no salió en 10 minutos: volver a apretar |
+| Grupos de 3 con pausa | "Encontrar el bastón" (lo pidieron desde la app) |
+
+El **motor vibra solo por obstáculos**: más cerca, más fuerte y más rápido.
+Mientras una alerta se manda, otra presión del botón se ignora (no 5 alertas iguales).
 
 ### Comandos por USB (DevKit, monitor serie a 115200)
 

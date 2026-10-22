@@ -89,8 +89,31 @@ static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& out
   }
 
   // --- body ---
+  // De a bloques: antes se agregaba de a UN carácter al String, y con respuestas
+  // grandes (Firestore devuelve el documento completo, que en una alerta trae la
+  // foto en base64) eran miles de realocaciones y varios segundos perdidos.
   outResponse = "";
+  if (contentLength > 0) outResponse.reserve(contentLength);
   const uint32_t deadline = millis() + 15000;   // corte de seguridad
+  char buf[512];
+
+  // Lee hasta 'want' bytes (o hasta que se corte), agregándolos a outResponse.
+  auto readBytes = [&](long want) {
+    long got = 0;
+    while ((want < 0 || got < want) && (int32_t)(deadline - millis()) > 0) {
+      const int avail = client.available();
+      if (avail > 0) {
+        long n = min((long)sizeof(buf), (long)avail);
+        if (want >= 0) n = min(n, want - got);
+        const int r = client.read((uint8_t*)buf, n);
+        if (r > 0) { outResponse.concat(buf, r); got += r; }
+      } else if (!client.connected()) {
+        break;
+      } else {
+        delay(1);
+      }
+    }
+  };
 
   if (chunked) {
     while ((int32_t)(deadline - millis()) > 0) {
@@ -102,23 +125,11 @@ static bool readHttpResponse(WiFiClientSecure& client, int& outCode, String& out
       }
       long chunkSize = strtol(sizeLine.c_str(), nullptr, 16);
       if (chunkSize <= 0) break;                               // chunk final "0"
-      long got = 0;
-      while (got < chunkSize && (int32_t)(deadline - millis()) > 0) {
-        if (client.available()) { outResponse += (char)client.read(); got++; }
-        else if (!client.connected()) break;
-        else delay(1);
-      }
+      readBytes(chunkSize);
       client.readStringUntil('\n');                            // consume el CRLF del chunk
     }
   } else {
-    long got = 0;
-    while ((int32_t)(deadline - millis()) > 0) {
-      if (client.available()) {
-        outResponse += (char)client.read(); got++;
-        if (contentLength >= 0 && got >= contentLength) break;
-      } else if (!client.connected()) break;
-      else delay(1);
-    }
+    readBytes(contentLength);                                  // -1 = hasta que cierre
   }
   return outCode >= 200 && outCode < 300;
 }
@@ -301,22 +312,34 @@ bool FirebaseRest::firestoreSet(const String& docPath, const String& fieldsJson)
   return ok;
 }
 
-bool FirebaseRest::firestoreUpdate(const String& docPath, const String& fieldsJson,
-                                   const String& updateMaskFields, String* outDocJson) {
-  ensureToken();
-  // updateMask: ?updateMask.fieldPaths=foo&updateMask.fieldPaths=bar
-  String mask;
+// "a,b" -> "&<param>=a&<param>=b"
+static String fieldPathsQuery(const char* param, const String& csv) {
+  String q;
   int start = 0;
-  while (start < (int)updateMaskFields.length()) {
-    int comma = updateMaskFields.indexOf(',', start);
-    String f = (comma < 0) ? updateMaskFields.substring(start)
-                           : updateMaskFields.substring(start, comma);
+  while (start < (int)csv.length()) {
+    int comma = csv.indexOf(',', start);
+    String f = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
     f.trim();
-    if (f.length()) mask += "&updateMask.fieldPaths=" + f;
+    if (f.length()) q += String("&") + param + "=" + f;
     if (comma < 0) break;
     start = comma + 1;
   }
-  String path = fsDocPath(docPath) + "?" + mask.substring(1);  // saca el primer '&'
+  return q;
+}
+
+bool FirebaseRest::firestoreUpdate(const String& docPath, const String& fieldsJson,
+                                   const String& updateMaskFields, String* outDocJson,
+                                   const String& returnFields) {
+  ensureToken();
+  // updateMask = qué campos se escriben (el resto del doc queda intacto).
+  String query = fieldPathsQuery("updateMask.fieldPaths", updateMaskFields);
+  // mask = qué campos devuelve Firestore en la respuesta. Por defecto devuelve el
+  // documento ENTERO, y en una alerta eso es la foto y el audio en base64 de
+  // vuelta (~250 KB que la CAM bajaba y tiraba). Si no se pide el documento, se
+  // pide un campo que no existe y la respuesta queda en unos pocos bytes.
+  if (!outDocJson)                query += "&mask.fieldPaths=_nada";
+  else if (returnFields.length()) query += fieldPathsQuery("mask.fieldPaths", returnFields);
+  String path = fsDocPath(docPath) + "?" + query.substring(1);  // saca el primer '&'
   String body = "{\"fields\":{" + fieldsJson + "}}";
   String resp; int code;
   bool ok = httpJson(HOST_FS, path, "PATCH", body, resp, code, true);
