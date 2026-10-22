@@ -1,5 +1,13 @@
 # SafeWalk — Estado del proyecto y continuidad
 
+> ### ⚠️ Sesión 5 (22/10/2026): lo más nuevo está en una RAMA, no acá
+> Claude trabajó solo y dejó todo en la rama **`claude/nucleos-ubicacion-real`**
+> (firmware del DevKit en dos núcleos, ubicación honesta, audio de la CAM sin SD,
+> prueba de push, guía de alimentación de la CAM). Hasta que se mergee:
+> - Leé el ESTADO de esa rama: https://github.com/pixelfede99/SafeWalk/blob/claude/nucleos-ubicacion-real/ESTADO-DEL-PROYECTO.md
+> - Abrí el pull request: https://github.com/pixelfede99/SafeWalk/compare/main...claude/nucleos-ubicacion-real?expand=1
+> - En local: `git fetch` y `git checkout claude/nucleos-ubicacion-real`
+
 > **Para retomar en cualquier PC (o en una charla nueva con Claude):** leé este
 > archivo primero. Resume dónde quedó todo, qué falta y cómo seguir.
 > Última actualización: 2026-10-20 (sesión 4: placas flasheadas con `bab7be2`,
