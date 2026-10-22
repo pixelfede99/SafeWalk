@@ -26,6 +26,10 @@
 #include "audio_record.h"
 #include "FirebaseRest.h"
 #include "mbedtls/base64.h"
+#ifdef CAM_DISABLE_BROWNOUT
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+#endif
 
 // JPEG máximo que mandamos inline (base64 = +33%, y el doc de Firestore tiene 1 MiB)
 #define PHOTO_MAX_JPEG_BYTES  (600 * 1024)
@@ -139,8 +143,15 @@ static void handleAlert(const String& alertId) {
 
 // ============================================================================
 void setup() {
+#ifdef CAM_DISABLE_BROWNOUT
+  // Solo en el env esp32cam_nobod (diagnóstico, ver platformio.ini).
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+#endif
   Serial.begin(CAM_LINK_BAUD);   // U0RXD recibe el alertId del DevKit a esta velocidad
   Serial.println("\n=== SafeWalk ESP32-CAM ===");
+#ifdef CAM_DISABLE_BROWNOUT
+  Serial.println("!!! DIAGNOSTICO: detector de brownout APAGADO (no usar en el baston) !!!");
+#endif
 
   // WiFi ANTES que la cámara: el pico de corriente al conectar el WiFi, sumado a
   // la cámara ya capturando, disparaba el brownout y la placa se reiniciaba.
