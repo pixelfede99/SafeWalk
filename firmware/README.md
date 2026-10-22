@@ -65,7 +65,7 @@ medido en el bastón real, el loop se trababa hasta **2,5 s** y quedaba bloquead
 
 - **Núcleo 1 (`loop`)**: sensores, motor, buzzer (no bloqueante), botón, GPS. Nunca
   toca la red. Medido: peor traba **26–68 ms**, 0 % bloqueado.
-- **Núcleo 0 (`netTask`)**: heartbeat, historial, poll de `commands/`, alertas y push.
+- **Núcleo 0 (`netTask`)**: heartbeat (que de paso trae el pedido de "sonar"), historial, alertas y push.
 - Se comunican por una **cola de emergencias**, una copia del GPS con mutex y
   variables atómicas (pedido de "sonar", resultado de la alerta). Ningún objeto que
   no sea thread-safe (`FirebaseRest`, `TinyGPS`) se usa desde los dos lados.
@@ -80,7 +80,9 @@ falló** (volver a apretar). Mientras una alerta se manda, otra presión se igno
 | `SOS` | Dispara la emergencia igual que el botón (`trigger: "prueba"`) |
 | `STATUS` | WiFi, Firebase, GPS, batería, MPU, trabas del loop, memoria |
 | `RING` | Hace sonar el patrón de "encontrar el bastón" 5 s |
+| `RINGTEST` | Escribe un pedido de "sonar" en `devices/` como la app: prueba el circuito completo (llega con el próximo heartbeat) |
 | `SINWIFI` | Corta el WiFi 40 s, para probar el reintento de alertas y la reconexión |
+| `SINHORA` | Pone el reloj en 1970, para probar que toma la hora del header `Date` si NTP no responde |
 | `AYUDA` | Lista de comandos |
 
 Si una alerta no se puede crear (sin WiFi, Firebase caído), queda **pendiente** y se

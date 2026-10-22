@@ -109,6 +109,12 @@ devices/{deviceId}
   - speed: number
   - bluetoothId?: string
   - inviteCode?: string      # código para que otro familiar se una al círculo
+  # "encontrar el bastón": los escribe la APP, el bastón los recibe con el heartbeat
+  - ringToken?: number       # nonce; el bastón actúa cuando cambia
+  - ringSeconds?: number     # cuánto sonar (0 = parar)
+  - ringRequestedBy?: string # uid de quien lo pidió
+  - ringRequestedAt?: timestamp
+  - ackToken?: number        # eco que escribe el BASTÓN al ejecutar la orden
 
 locations/{deviceId}/history/{auto-id}
   - lat: number
@@ -127,20 +133,20 @@ alerts/{alertId}
   - trigger?: "boton" | "caida" | "prueba"  # que la disparo en el baston
   - locationSource?: "device"|"device_last"|"phone"|"unknown"   # de donde salio `location`
   - notified?: boolean                      # lo marca /api/notify (evita push repetida)
-
-commands/{deviceId}          # ordenes de la APP -> BASTON (unico camino de ida)
-  - ringToken: number        # nonce; el baston actua cuando cambia
-  - ringSeconds: number      # cuanto sonar (0 = parar)
-  - requestedBy: string      # uid de quien lo pidio
-  - updatedAt: timestamp
-  - ackToken?: number        # eco que escribe el BASTON al ejecutar la orden
 ```
 
-> **Por qué `commands/` es una colección aparte y no un campo de `devices/`:**
-> el heartbeat del ESP32 reescribe `devices/{deviceId}` cada 10 s. Al principio lo
-> hacía con un PATCH **sin `updateMask`**, que en la REST API de Firestore reemplaza
-> el documento entero (hoy usa `updateMask`, pero la separación sigue siendo más
-> segura). Además así el bastón lee un documento chico.
+> **Por qué el pedido de "sonar" va en `devices/` y no en una colección aparte:**
+> antes iba en `commands/{deviceId}` y el bastón lo leía con un GET cada 5 s:
+> 17.280 lecturas por día **solo por estar prendido**, un tercio de la cuota del
+> plan gratis (50.000/día; si se pasa, Firestore deja de responder hasta el día
+> siguiente, alertas incluidas). Ahora el bastón lo recibe **gratis**: Firestore
+> contesta el PATCH del heartbeat con el documento completo. (Al principio no se
+> podía: el heartbeat hacía un PATCH sin `updateMask`, que reemplaza el documento
+> entero y se llevaba puesta la orden. Hoy usa `updateMask`.)
+>
+> **Otras decisiones por la cuota:** el historial guarda un punto solo si el
+> bastón se movió 20 m o más (quieto no genera puntos), y el historial de alertas
+> carga 30 (cada una pesa ~250 KB con foto y audio en base64).
 
 ## Qué tiene que hacer el ESP32
 
@@ -231,9 +237,9 @@ Detalles que no son cosméticos:
 
 ### Cómo funciona el "sonar"
 
-1. La app escribe `commands/{deviceId}` con un `ringToken` nuevo.
-2. El bastón lee ese doc cada `RING_POLL_INTERVAL_MS` (5 s por defecto) — es el
-   **único camino de lectura** del firmware, todo lo demás es escritura.
+1. La app escribe `ringToken` (nuevo) y `ringSeconds` en `devices/{deviceId}`.
+2. El bastón lo recibe en la respuesta de su próximo heartbeat (cada 10 s), sin
+   gastar lecturas de la cuota.
 3. Si el token cambió, hace pitar el buzzer en grupos de 3 durante `ringSeconds`
    (tope de `RING_MAX_SECONDS`), sin bloquear el loop.
 4. El bastón escribe `ackToken` de vuelta, y recién ahí la app le dice al
@@ -248,11 +254,11 @@ Limitaciones que conviene tener presentes:
 - **Si el bastón está sin batería o sin WiFi, no suena.** La app lo detecta por
   `isOnline` y lo dice, en vez de dejar al usuario esperando un pitido que no va
   a llegar. En ese caso ofrece la última ubicación conocida.
-- **El poll ya no traba la detección de obstáculos.** Toda la red del DevKit corre
-  en una tarea propia en el núcleo 0; el loop de sensores del núcleo 1 no espera a
-  Firebase (medido: peor traba 26–68 ms, antes 2,5 s). El costo del poll es solo
-  de red/batería; una versión de producción usaría una conexión persistente (MQTT
-  o Firestore Listen) en vez del poll.
+- **Tarda hasta 10 s en empezar a sonar** (el intervalo del heartbeat). Si a los
+  25 s no llegó la confirmación, la pantalla lo dice por voz.
+- **La red no traba la detección de obstáculos.** Toda la red del DevKit corre en
+  una tarea propia en el núcleo 0; el loop de sensores del núcleo 1 no espera a
+  Firebase (medido: peor traba 26–68 ms, antes 2,5 s).
 
 El SOS sigue estando, como acción secundaria con hold-to-confirm de 3 s, pero
 ahora manda la ubicación del **teléfono** (`navigator.geolocation`) y marca en

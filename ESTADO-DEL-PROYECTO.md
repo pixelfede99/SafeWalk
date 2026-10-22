@@ -24,9 +24,15 @@
 
 ### ✋ Lo que tenés que hacer vos (en este orden)
 
-Los pasos 1 a 3 son **sin hardware** y se pueden hacer desde el celular.
+Los pasos 1 y 2 son **sin hardware** y se pueden hacer desde el celular.
 
-**1. Cargar `FIREBASE_SERVICE_ACCOUNT` en Vercel (sin esto NO llega ninguna push).**
+**1. Abrir, revisar y mergear el pull request** de la rama `claude/nucleos-ubicacion-real`
+(todo lo de abajo): https://github.com/pixelfede99/SafeWalk/compare/main...claude/nucleos-ubicacion-real?expand=1
+(Claude no pudo abrirlo: no hay `gh` instalado.) Al mergear, Vercel publica la web nueva
+sola. **Hasta mergear, la web publicada no entiende lo que manda el firmware nuevo**
+(por ejemplo, muestra "-1%" de batería y "encontrar el bastón" no anda).
+
+**2. Cargar `FIREBASE_SERVICE_ACCOUNT` en Vercel (sin esto NO llega ninguna push).**
 Verificado el 22/10: la variable **no existe** en el proyecto `safe-walk`, ni en
 Production ni en Preview (los dos deploys dicen `Falta la variable FIREBASE_SERVICE_ACCOUNT`).
 1. Firebase Console → ⚙️ Configuración del proyecto → **Cuentas de servicio** →
@@ -37,28 +43,23 @@ Production ni en Preview (los dos deploys dicen `Falta la variable FIREBASE_SERV
    - Value: **todo** el contenido del `.json`, desde `{` hasta `}`
    - Environments: tildá **Production** y **Preview**
 3. Guardá → Deployments → el de arriba → ⋯ → **Redeploy**.
-4. **Verificá** abriendo https://safe-walk-mauve.vercel.app/api/notify (cuando esté mergeado
-   el PR del punto 3): tiene que decir `{"configured":true}`. Si dice
-   `configured:false`, el `reason` dice qué falta.
+4. **Verificá** abriendo https://safe-walk-mauve.vercel.app/api/notify (con el PR ya
+   mergeado): tiene que decir `{"configured":true}`. Si dice `configured:false`, el
+   `reason` dice qué falta.
 5. Después, en la app → **Mi cuenta → Notificaciones → Probar notificación**: prueba
    toda la cadena y dice en qué paso se corta.
 
 > El `.json` es una llave del proyecto: **no lo subas a GitHub** ni lo mandes por chat.
 
-**2. Publicar las reglas de Firestore (gratis).** Firebase Console → Firestore Database
-→ **Reglas** → borrá todo, pegá el contenido de [`firestore.rules`](firestore.rules) →
-**Publicar**. Sin esto, "encontrar el bastón" no anda (el bastón recibe 403 al leer
-`commands/`; ahora reintenta cada 60 s y lo avisa por el serial).
+**(Ya no hace falta) publicar las reglas de Firestore.** "Encontrar el bastón" ahora usa
+`devices/`, que ya tiene reglas publicadas, así que todo anda con las reglas actuales.
+Publicar `firestore.rules` no rompe nada, pero no es necesario.
 
-**3. Abrir, revisar y mergear el pull request** de la rama `claude/nucleos-ubicacion-real`
-(lo de abajo): https://github.com/pixelfede99/SafeWalk/compare/main...claude/nucleos-ubicacion-real?expand=1
-(Claude no pudo abrirlo: no hay `gh` instalado.) Al mergear, Vercel publica la web nueva sola.
-
-**4. Alimentación de la CAM (el bloqueante de hardware).** Ver
+**3. Alimentación de la CAM (el bloqueante de hardware).** Ver
 [`firmware/ALIMENTACION-CAM.md`](firmware/ALIMENTACION-CAM.md): checklist en orden, qué
 medir, y cómo usar el firmware de diagnóstico `esp32cam_nobod`.
 
-**5. Flashear la CAM con el firmware nuevo** (audio sin SD, foto primero) y hacer la
+**4. Flashear la CAM con el firmware nuevo** (audio sin SD, foto primero) y hacer la
 prueba completa (al final de esta sección).
 
 ### 🤖 Lo que hice solo en la sesión 5 (todo en el PR, probado donde se pudo)
@@ -98,9 +99,26 @@ prueba completa (al final de esta sección).
   los 61 min de uptime (el token original ya había vencido) el heartbeat sigue en 200.
 - **Bug: respuestas cortadas.** Si Firestore tardaba más de 1 s en contestar, la
   respuesta entera (headers incluidos) terminaba como "cuerpo" con código 0. Ahora espera.
+- **Bug: sin NTP el bastón quedaba en 1970.** Si NTP no responde (arranque sin WiFi, o
+  redes que lo bloquean, como muchas de colegios), el reloj quedaba en 1970: la app veía
+  el bastón **Offline para siempre** y las alertas quedaban fechadas en 1970 (**sin
+  banner**). Ahora toma la hora del header `Date` de las respuestas de Google, calcula la
+  hora real del evento al enviar, y el ID de la alerta lleva un sufijo al azar (antes dos
+  alertas sin hora podían pisarse). Probado con `SINHORA` + `SOS` en la placa.
+- **"Encontrar el bastón" sin gastar la cuota de Firestore.** El bastón leía `commands/`
+  cada 5 s: **17.280 lecturas por día solo por estar prendido**, un tercio del límite
+  gratis (si se pasa, Firestore deja de andar hasta el día siguiente, alertas incluidas).
+  Ahora el pedido va en `devices/` y llega **gratis** en la respuesta del heartbeat; de
+  paso anda con las reglas ya publicadas. Tarda hasta 10 s (antes 5). Probado con
+  `RINGTEST`: sonó 4 s después del pedido. Arreglado además un bug viejo: si al arrancar
+  no había ningún pedido previo, el primero real se ignoraba.
+- **Historial por distancia:** un punto solo si el bastón se movió 20 m o más (quieto no
+  genera puntos). Antes, uno cada 30 s aunque estuviera quieto; el dashboard los lee todos
+  cada vez que se abre, y con ~25 aperturas por día se agotaba la cuota.
 - **Comandos por USB** (monitor serie 115200): `SOS` (emergencia de prueba), `STATUS`
   (WiFi, Firebase, GPS, batería, alerta pendiente, trabas del loop, memoria), `RING`
-  (pitido 5 s), `SINWIFI` (corta el WiFi 40 s para probar), `AYUDA`.
+  (pitido 5 s), `RINGTEST` (pedido de sonar como la app), `SINWIFI` (corta el WiFi 40 s),
+  `SINHORA` (reloj en 1970), `AYUDA`.
 
 **Web — compila, build de producción OK, revisada en el navegador con datos de prueba:**
 - El mapa ya **no dibuja el bastón en el Obelisco** cuando no hay ubicación: cartel
@@ -220,16 +238,16 @@ lo resolvía (el buzzer del GPIO2). Así que:
 
 - **Acción principal ahora: "SONAR BASTÓN"** (un tap, sin mantener apretado:
   hacerlo sonar no rompe nada y se corta solo).
-- **El SOS queda como acción secundaria** con hold de 2 s, y ahora manda la
+- **El SOS queda como acción secundaria** con hold de 3 s, y ahora manda la
   ubicación del TELÉFONO (`navigator.geolocation`). La alerta guarda de dónde
   salió la ubicación y el dashboard lo muestra, para que la familia no salga a
   buscar al lugar equivocado.
 
-**Cómo funciona el "sonar":** la app escribe `commands/{deviceId}` con un
-`ringToken` nuevo → el bastón lee ese doc cada 5 s (es el **único camino de
-lectura** del firmware; hubo que agregarle `firestoreGet()` a `FirebaseRest`,
-que solo sabía escribir) → pita en grupos de 3 → escribe `ackToken` de vuelta
-para que la app pueda confirmarle al usuario que el bastón SÍ recibió la orden.
+**Cómo funciona el "sonar"** (actualizado en la sesión 5): la app escribe
+`ringToken`/`ringSeconds` en `devices/{deviceId}` → el bastón lo recibe en la
+respuesta de su heartbeat (cada 10 s, sin gastar lecturas) → pita en grupos de 3 →
+escribe `ackToken` de vuelta para que la app pueda confirmarle al usuario que el
+bastón SÍ recibió la orden. (En la sesión 3 era `commands/{deviceId}` leído cada 5 s.)
 
 ### ⚠️ Lo que falta probar en el hardware (no se pudo verificar por software)
 
@@ -239,22 +257,16 @@ para que la app pueda confirmarle al usuario que el bastón SÍ recibió la orde
    abajo de un sillón**, que es como se pierde en la vida real. Si no se
    escucha, el buzzer de 5V por transistor no alcanza y hay que pensar en uno
    más potente: **ahí se cae la función**, así que probalo antes que nada.
-2. **Que el ciclo completo ande:** apretar "SONAR BASTÓN" en el celular y que el
-   bastón pite en ≤ 5 s, y que la app pase de "Esperando que el bastón
-   conteste..." a "El bastón recibió el pedido" (eso confirma que el `ackToken`
-   vuelve).
-3. **Que el GET a Firestore funcione** (`firestoreGet` manda un GET con
-   `Content-Length: 0`; Google debería aceptarlo, pero no se pudo probar contra
-   Firestore real).
+2. **Que el ciclo completo ande desde el celular:** apretar "SONAR BASTÓN" y que
+   el bastón pite en ≤ 10 s, y que la app pase a "El bastón recibió el pedido"
+   (eso confirma que el `ackToken` vuelve). **Del lado del bastón ya está probado**
+   (sesión 5, comando `RINGTEST`); falta desde la app, con el PR mergeado.
 
 ### Compromiso que conviene tener en la cabeza
 
-El poll abre una conexión TLS nueva cada 5 s y **bloquea el loop ~1 s**, igual
-que el heartbeat. Mientras tanto **no se mide obstáculos**. Si al probarlo el
-bastón se siente "lento" para avisar obstáculos, subí `RING_POLL_INTERVAL_MS`
-en `config.h` (a costa de que tarde más en empezar a sonar). La solución de
-verdad sería una conexión persistente (MQTT o Firestore Listen) en vez del poll,
-pero eso es bastante más firmware.
+~~El poll bloquea el loop ~1 s~~ — **resuelto en la sesión 5**: la red corre en el
+núcleo 0 y el loop de obstáculos ya no se traba (peor caso 26–68 ms), y ya no hay
+poll: el pedido llega con el heartbeat.
 
 ---
 
